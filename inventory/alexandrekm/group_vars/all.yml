@@ -7,8 +7,8 @@ systemd_dir: /etc/systemd/system
 # Set your timezone
 system_timezone: America/Vancouver
 
-# interface which will be used for flannel
-flannel_iface: eth0
+# interface which will be used for flannel (commented out as Cilium is now used)
+# flannel_iface: eth0
 
 # uncomment calico_iface to use tigera operator/calico cni instead of flannel https://docs.tigera.io/calico/latest/about
 # calico_iface: "eth0"
@@ -17,9 +17,9 @@ calico_tag: v3.29.0 # calico version tag
 
 # uncomment cilium_iface to use cilium cni instead of flannel or calico
 # ensure v4.19.57, v5.1.16, v5.2.0 or more recent kernel
-# cilium_iface: "eth0"
+cilium_iface: "eth0"
 cilium_mode: native # native when nodes on same subnet or using bgp, else set routed
-cilium_tag: v1.18.3 # cilium version tag
+cilium_tag: v1.18.2 # cilium version tag
 cilium_hubble: true # enable hubble observability relay and ui
 
 # if using calico or cilium, you may specify the cluster pod cidr pool
