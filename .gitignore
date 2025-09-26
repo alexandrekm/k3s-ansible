@@ -1,5 +1,4 @@
 .env/
 *.log
-#ansible.cfg
+ansible.cfg
 kubeconfig
-.vault_pass
