@@ -102,19 +102,16 @@
             - /tmp/k3s/cilium-linux-{{ cli_arch }}.tar.gz.sha256sum
 
     - name: Wait for connectivity to kube VIP
-      ansible.builtin.command: ping -c 1 {{ apiserver_endpoint }}
-      register: ping_result
-      until: ping_result.rc == 0
-      retries: 21
-      delay: 1
-      ignore_errors: true
+      ansible.builtin.uri:
+        url: "https://{{ apiserver_endpoint }}:6443/livez"
+        validate_certs: false
+        method: GET
+      register: api_server_status
+      until: api_server_status.status == 200
+      retries: 30
+      delay: 5
       changed_when: false
-
-    - name: Fail if kube VIP not reachable
-      ansible.builtin.fail:
-        msg: API endpoint {{ apiserver_endpoint }} is not reachable
-      when: ping_result.rc != 0
-
+      
     - name: Test for existing Cilium install
       ansible.builtin.command: |
         {{ k3s_kubectl_binary | default('k3s kubectl') }} -n kube-system get daemonsets cilium
@@ -183,6 +180,13 @@
         {% if kube_proxy_replacement is not false %}
         --helm-set bpf.loadBalancer.algorithm={{ bpf_lb_algorithm }}
         --helm-set bpf.loadBalancer.mode={{ bpf_lb_mode }}
+        {% endif %}
+        {% if cilium_gateway_api_enabled | default(false) %}
+        --helm-set gatewayAPI.enabled=true
+        {% endif %}
+        {% if cilium_l2_announcements_enabled | default(false) %}
+        --helm-set l2announcements.enabled=true
+        --helm-set l2announcements.ipPools[0].cidrs[0]={{ cilium_bgp_lb_cidr }}
         {% endif %}
       environment:
         KUBECONFIG: "{{ ansible_user_dir }}/.kube/config"

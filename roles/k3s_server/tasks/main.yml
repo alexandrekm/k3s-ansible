@@ -42,6 +42,17 @@
 - name: Verification
   when: not ansible_check_mode
   block:
+    - name: Wait for Kubernetes API server to be live
+      ansible.builtin.uri:
+        url: "https://localhost:6443/livez"
+        validate_certs: false
+        method: GET
+      register: api_server_status
+      until: api_server_status.status == 200
+      retries: 60 # Increased retries for more robustness
+      delay: 10
+      changed_when: false
+
     - name: Verify that all nodes actually joined (check k3s-init.service if this fails)
       ansible.builtin.command:
         cmd: "{{ k3s_kubectl_binary | default('k3s kubectl') }} get nodes -l 'node-role.kubernetes.io/master=true' -o=jsonpath='{.items[*].metadata.name}'" # yamllint disable-line rule:line-length

@@ -2,6 +2,9 @@
 - name: Pre tasks
   hosts: all
   pre_tasks:
+    - name: Include vault variables
+      ansible.builtin.include_vars:
+        file: inventory/alexandrekm/group_vars/vault.yml
     - name: Verify Ansible is version 2.11 or above. (If this fails you may need to update Ansible)
       ansible.builtin.assert:
         that: ansible_version.full is version_compare('2.11', '>=')
