@@ -7,6 +7,9 @@ systemd_dir: /etc/systemd/system
 # Set your timezone
 system_timezone: America/Vancouver
 
+# keep swap enabled for now - upstream defaults to disabling it on all nodes (2026-09 merge)
+disable_swap: false
+
 # interface which will be used for flannel (commented out as Cilium is now used)
 flannel_iface: eth0
 
@@ -21,6 +24,7 @@ calico_tag: v3.29.0 # calico version tag
 cilium_mode: native # native when nodes on same subnet or using bgp, else set routed
 cilium_tag: v1.18.2 # cilium version tag
 cilium_hubble: true # enable hubble observability relay and ui
+cilium_envoy: false # keep upstream Envoy proxy off (only relevant if Cilium is deployed)
 
 # if using calico or cilium, you may specify the cluster pod cidr pool
 cluster_cidr: 10.52.0.0/16
@@ -36,6 +40,7 @@ cilium_bgp_lb_cidr: 10.10.10.100/24 # cidr for cilium loadbalancer ipam
 
 # enable kube-vip ARP broadcasts
 kube_vip_arp: true
+kube_vip_enabled: true # keep kube-vip control-plane VIP + service LB (upstream default)
 
 # enable kube-vip BGP peering
 kube_vip_bgp: false
@@ -96,6 +101,7 @@ kube_vip_tag_version: v1.0.0
 
 # metallb type frr or native
 metal_lb_type: native
+metal_lb_enabled: true # keep MetalLB for service load balancing (upstream default)
 
 # metallb mode layer2 or bgp
 metal_lb_mode: layer2
