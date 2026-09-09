@@ -30,26 +30,13 @@
           }}
       when: cilium_cli_installed.rc == 0
 
-    - name: Get latest stable Cilium CLI version file
-      ansible.builtin.get_url:
-        url: https://raw.githubusercontent.com/cilium/cilium-cli/main/stable.txt
-        dest: /tmp/k3s/cilium-cli-stable.txt
-        owner: root
-        group: root
-        mode: "0755"
-
-    - name: Read Cilium CLI stable version from file
-      ansible.builtin.command: cat /tmp/k3s/cilium-cli-stable.txt
-      register: cli_ver
-      changed_when: false
-
     - name: Log installed Cilium CLI version
       ansible.builtin.debug:
         msg: "Installed Cilium CLI version: {{ installed_cli_version | default('Not installed') }}"
 
-    - name: Log latest stable Cilium CLI version
+    - name: Log pinned Cilium CLI version
       ansible.builtin.debug:
-        msg: "Latest Cilium CLI version: {{ cli_ver.stdout }}"
+        msg: "Pinned Cilium CLI version: {{ cilium_cli_tag }}"
 
     - name: Determine if Cilium CLI needs installation or update
       ansible.builtin.set_fact:
@@ -57,7 +44,7 @@
           {{
             cilium_cli_installed.rc != 0 or
             (cilium_cli_installed.rc == 0 and
-            installed_cli_version != cli_ver.stdout)
+            installed_cli_version != cilium_cli_tag)
           }}
 
     - name: Install or update Cilium CLI
@@ -78,7 +65,11 @@
             - .tar.gz
             - .tar.gz.sha256sum
           vars:
-            cilium_base_url: https://github.com/cilium/cilium-cli/releases/download/{{ cli_ver.stdout }}
+            cilium_base_url: https://github.com/cilium/cilium-cli/releases/download/{{ cilium_cli_tag }}
+          register: cilium_cli_download
+          retries: "{{ download_retries }}"
+          delay: "{{ download_delay }}"
+          until: cilium_cli_download is succeeded
 
         - name: Verify the downloaded tarball
           ansible.builtin.shell: |
@@ -156,6 +147,13 @@
               Target Cilium version: {{ cilium_tag }},
               Update needed: {{ cilium_needs_update }}
 
+    - name: Map the legacy routed mode to Cilium tunnel mode
+      ansible.builtin.set_fact:
+        # Cilium 1.20 accepts `native` or `tunnel`. `routed` was the name used
+        # by older releases and is kept only as a backward-compatible alias.
+        cilium_routing_mode: >-
+          {{ 'tunnel' if cilium_mode == 'routed' else cilium_mode }}
+
     - name: Install Cilium
       ansible.builtin.command: >-
         {% if cilium_installed.rc != 0 %}
@@ -167,27 +165,35 @@
         --helm-set operator.replicas="1"
         {{ '--helm-set devices=' + cilium_iface if cilium_iface != 'auto' else '' }}
         --helm-set ipam.operator.clusterPoolIPv4PodCIDRList={{ cluster_cidr }}
-        {% if cilium_mode == "native" or (cilium_bgp and cilium_exportPodCIDR != 'false') %}
+        {% if cilium_routing_mode == "native" or (cilium_bgp and cilium_exportPodCIDR != 'false') %}
         --helm-set ipv4NativeRoutingCIDR={{ cluster_cidr }}
         {% endif %}
         --helm-set k8sServiceHost="127.0.0.1"
         --helm-set k8sServicePort="6444"
-        --helm-set routingMode={{ cilium_mode }}
-        --helm-set autoDirectNodeRoutes={{ "true" if cilium_mode == "native" else "false" }}
+        --helm-set routingMode={{ cilium_routing_mode }}
+        --helm-set autoDirectNodeRoutes={{ "true" if cilium_routing_mode == "native" else "false" }}
         --helm-set kubeProxyReplacement={{ kube_proxy_replacement }}
         --helm-set bpf.masquerade={{ enable_bpf_masquerade }}
         --helm-set bgpControlPlane.enabled={{ cilium_bgp | default("false") }}
         --helm-set hubble.enabled={{ "true" if cilium_hubble else "false" }}
         --helm-set hubble.relay.enabled={{ "true" if cilium_hubble else "false" }}
         --helm-set hubble.ui.enabled={{ "true" if cilium_hubble else "false" }}
+        --helm-set envoy.enabled={{ "true" if cilium_envoy else "false" }}
         {% if kube_proxy_replacement is not false %}
-        --helm-set bpf.loadBalancer.algorithm={{ bpf_lb_algorithm }}
-        --helm-set bpf.loadBalancer.mode={{ bpf_lb_mode }}
+        --helm-set loadBalancer.algorithm={{ bpf_lb_algorithm }}
+        --helm-set loadBalancer.mode={{ bpf_lb_mode }}
         {% endif %}
       environment:
         KUBECONFIG: "{{ ansible_user_dir }}/.kube/config"
       register: cilium_install_result
       changed_when: cilium_install_result.rc == 0
+      # cilium install/upgrade fetches the Helm chart from helm.cilium.io, which is
+      # fronted by GitHub Pages and can transiently fail DNS resolution through the
+      # host resolver (intermittent "lookup helm.cilium.io ... i/o timeout"). Retry
+      # so a transient name/network failure does not abort the whole converge play.
+      until: cilium_install_result.rc == 0
+      retries: "{{ download_retries }}"
+      delay: "{{ download_delay }}"
       when: cilium_installed.rc != 0 or cilium_needs_update
 
     - name: Wait for Cilium resources
@@ -218,6 +224,16 @@
       when: >-
         not item.check_hubble | default(false) or (item.check_hubble | default(false) and cilium_hubble)
 
+    - name: Wait for Cilium status to be healthy
+      ansible.builtin.command: cilium status --wait
+      environment:
+        KUBECONFIG: "{{ ansible_user_dir }}/.kube/config"
+      register: cilium_status
+      changed_when: false
+      until: cilium_status.rc == 0
+      retries: 30
+      delay: 7
+
     - name: Configure Cilium BGP
       when: cilium_bgp
       block:
@@ -233,23 +249,38 @@
             group: root
             mode: "0755"
 
+        - name: Preflight validate rendered BGP manifests against installed CRDs
+          ansible.builtin.command: >-
+            {{ k3s_kubectl_binary | default('k3s kubectl') }}
+            apply --dry-run=server -f /tmp/k3s/cilium-bgp.yaml
+          register: preflight_cr
+          changed_when: false
+          failed_when: preflight_cr.rc != 0
+
         - name: Apply BGP manifests
-          ansible.builtin.command:
-            cmd: "{{ k3s_kubectl_binary | default('k3s kubectl') }} apply -f /tmp/k3s/cilium-bgp.yaml"
+          ansible.builtin.command: >-
+            {{ k3s_kubectl_binary | default('k3s kubectl') }}
+            apply -f /tmp/k3s/cilium-bgp.yaml
           register: apply_cr
           changed_when: "'configured' in apply_cr.stdout or 'created' in apply_cr.stdout"
-          failed_when: "'is invalid' in apply_cr.stderr"
-          ignore_errors: true
+          failed_when: apply_cr.rc != 0
 
-        - name: Print error message if BGP manifests application fails
-          ansible.builtin.debug:
-            msg: "{{ apply_cr.stderr }}"
-          when: "'is invalid' in apply_cr.stderr"
+        - name: Remove deprecated CiliumBGPPeeringPolicy after v2 resources are accepted
+          ansible.builtin.command: >-
+            {{ k3s_kubectl_binary | default('k3s kubectl') }}
+            delete CiliumBGPPeeringPolicy.cilium.io 01-bgp-peering-policy
+          register: delete_old_policy
+          changed_when: "'deleted' in delete_old_policy.stdout"
+          # The policy (and possibly its CRD) may already be absent; this is
+          # intentionally tolerated, not a command whose failure must be hidden.
+          failed_when: false
 
         - name: Test for BGP config resources
           ansible.builtin.command: "{{ item }}"
           loop:
-            - "{{ k3s_kubectl_binary | default('k3s kubectl') }} get CiliumBGPPeeringPolicy.cilium.io"
+            - "{{ k3s_kubectl_binary | default('k3s kubectl') }} get CiliumBGPClusterConfig.cilium.io"
+            - "{{ k3s_kubectl_binary | default('k3s kubectl') }} get CiliumBGPPeerConfig.cilium.io"
+            - "{{ k3s_kubectl_binary | default('k3s kubectl') }} get CiliumBGPAdvertisement.cilium.io"
             - "{{ k3s_kubectl_binary | default('k3s kubectl') }} get CiliumLoadBalancerIPPool.cilium.io"
           changed_when: false
           loop_control:

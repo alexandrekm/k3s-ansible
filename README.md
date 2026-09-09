@@ -2,51 +2,70 @@
 
 ![Fully Automated K3S etcd High Availability Install](https://img.youtube.com/vi/CbkEWcUZ7zM/0.jpg)
 
-This playbook will build an HA Kubernetes cluster with `k3s`, `kube-vip` and MetalLB via `ansible`.
+This Ansible collection builds a highly available Kubernetes cluster with k3s. It supports kube-vip for the control
+plane virtual IP, multiple CNI options, and either MetalLB or kube-vip for service load balancing.
 
 This is based on the work from [this fork](https://github.com/212850a/k3s-ansible) which is based on the work from [k3s-io/k3s-ansible](https://github.com/k3s-io/k3s-ansible). It uses [kube-vip](https://kube-vip.io/) to create a load balancer for control plane, and [metal-lb](https://metallb.universe.tf/installation/) for its service `LoadBalancer`.
 
-If you want more context on how this works, see:
+For more context on how it works, see:
 
-📄 [Documentation](https://technotim.live/posts/k3s-etcd-ansible/) (including example commands)
+📄 [Documentation](https://technotim.com/posts/k3s-etcd-ansible/) (including example commands)
 
 📺 [Watch the Video](https://www.youtube.com/watch?v=CbkEWcUZ7zM)
 
+## Project guides
+
+- [Getting started](#-getting-started)
+- [Configuration variables](#variables)
+- [Upgrading an existing cluster](#-upgrading-an-existing-cluster)
+- [Local Molecule testing](molecule/README.md)
+- [Contributing guidelines](CONTRIBUTING.md)
+- [Repository guide for coding agents](AGENTS.md)
+
 ## 📖 k3s Ansible Playbook
 
-Build a Kubernetes cluster using Ansible with k3s. The goal is easily install a HA Kubernetes cluster on machines running:
+Build a Kubernetes cluster using Ansible and k3s. The goal is to make a highly available cluster straightforward to
+install on machines running:
 
-- [x] Debian (tested on version 11)
-- [x] Ubuntu (tested on version 22.04)
-- [x] Rocky (tested on version 9)
+- [x] Debian (tested on version 13)
+- [x] Ubuntu (tested on version 26.04 LTS)
+- [x] Rocky (tested on version 10)
 
-on processor architecture:
+Supported processor architectures are:
 
-- [X] x64
-- [X] arm64
-- [X] armhf
+- [x] x64
+- [x] arm64
+- [x] armhf
 
 ## ✅ System requirements
 
-- Control Node (the machine you are running `ansible` commands) must have Ansible 2.11+ If you need a quick primer on Ansible [you can check out my docs and setting up Ansible](https://technotim.live/posts/ansible-automation/).
+- The control node, which runs the Ansible commands, must have Ansible 2.11 or newer. For a quick primer, see
+  [setting up Ansible](https://technotim.com/posts/ansible-automation/).
 
-- You will also need to install collections that this playbook uses by running `ansible-galaxy collection install -r ./collections/requirements.yml` (important❗)
+- Install the required collections with
+  `ansible-galaxy collection install -r ./collections/requirements.yml`.
 
 - [`netaddr` package](https://pypi.org/project/netaddr/) must be available to Ansible. If you have installed Ansible via apt, this is already taken care of. If you have installed Ansible via `pip`, make sure to install `netaddr` into the respective virtual environment.
 
-- `server` and `agent` nodes should have passwordless SSH access, if not you can supply arguments to provide credentials `--ask-pass --ask-become-pass` to each command.
+- Server and agent nodes should support passwordless SSH access. Otherwise, pass `--ask-pass --ask-become-pass` to
+  each playbook command.
+
+- Every node in the cluster must have a **unique hostname**. k3s registers each node keyed by its hostname, so
+  two nodes with the same hostname cannot join the cluster. `site.yml` asserts this up front and fails fast if
+  any duplicate is found.
 
 ## 🚀 Getting Started
 
 ### 🍴 Preparation
 
-First create a new directory based on the `sample` directory within the `inventory` directory:
+Create a cluster-specific inventory from the sample. The `inventory/` directory ignores custom inventory content so
+credentials and environment details aren't committed accidentally.
 
 ```bash
 cp -R inventory/sample inventory/my-cluster
 ```
 
-Second, edit `inventory/my-cluster/hosts.ini` to match the system information gathered above
+Edit `inventory/my-cluster/hosts.ini` to match the target hosts.
 
 For example:
 
@@ -67,9 +86,10 @@ node
 
 If multiple hosts are in the master group, the playbook will automatically set up k3s in [HA mode with etcd](https://rancher.com/docs/k3s/latest/en/installation/ha-embedded/).
 
-Finally, copy `ansible.example.cfg` to `ansible.cfg` and adapt the inventory path to match the files that you just created.
+Copy `ansible.example.cfg` to `ansible.cfg`, then update its inventory path. The local `ansible.cfg` file is ignored by
+Git.
 
-This requires at least k3s version `1.19.1` however the version is configurable by using the `k3s_version` variable.
+The minimum k3s version is `1.19.1`. Select the desired version with the `k3s_version` variable.
 
 If needed, you can also edit `inventory/my-cluster/group_vars/all.yml` to match your environment.
 
@@ -81,7 +101,8 @@ Start provisioning of the cluster using the following command:
 ansible-playbook site.yml -i inventory/my-cluster/hosts.ini
 ```
 
-After deployment control plane will be accessible via virtual ip-address which is defined in inventory/group_vars/all.yml as `apiserver_endpoint`
+After deployment, the control plane is accessible through the virtual IP defined by `apiserver_endpoint` in the
+inventory variables.
 
 ### 🔥 Remove k3s cluster
 
@@ -89,7 +110,51 @@ After deployment control plane will be accessible via virtual ip-address which i
 ansible-playbook reset.yml -i inventory/my-cluster/hosts.ini
 ```
 
->You should also reboot these nodes due to the VIP not being destroyed
+> Reboot the nodes after reset because the virtual IP may remain configured.
+
+### ⏻️ Reboot Cluster Nodes
+
+Reboot all cluster nodes at once or stage the reboot across the cluster.
+
+```bash
+ansible-playbook reboot.yml -i inventory/my-cluster/hosts.ini
+```
+
+To reboot the nodes in batches, set `concurrent_reboots` to the number of nodes
+to reboot at a time (or a percentage). Optionally set `wait_seconds_after_reboot`
+to pause after each batch so pods in the freshly rebooted batch can settle
+before the next batch reboots.
+
+```bash
+ansible-playbook reboot.yml -i inventory/my-cluster/hosts.ini \
+  --extra-vars 'concurrent_reboots=2 wait_seconds_after_reboot=30'
+```
+
+## 🔁 Upgrading an existing cluster
+
+These version variables select the components used for a **fresh** installation.
+They are not a supported direct in-place upgrade path for an existing cluster.
+K3s, Calico, and Cilium each require staged upgrades for long-lived clusters.
+
+- **K3s**: do not jump an embedded-etcd cluster straight to Kubernetes 1.36.
+  Upgrade one Kubernetes minor version at a time. From the sample default
+  (`v1.30.2+k3s2`) the sequence is: the latest supported 1.30 patch, then 1.31,
+  1.32, a 1.33 patch that contains etcd 3.5.26 (for example `v1.33.7+k3s3`),
+  then 1.34, 1.35, and finally 1.36. Upgrade servers one at a time before
+  agents. Take backups and confirm cluster health at each step; this playbook
+  does not automate the upgrade, so those remain manual operational steps. See
+  [K3s manual upgrades](https://docs.k3s.io/upgrades/manual) and the
+  [v1.34 release notes](https://docs.k3s.io/release-notes/v1.34.X).
+- **Cilium**: upstream supports only consecutive minor upgrades. Update to the
+  latest patch of the current minor, then upgrade 1.17, 1.18, 1.19, and 1.20 in
+  order, reading each version's upgrade notes and running preflight checks.
+  Do not attempt a direct upgrade from an old Cilium to 1.20.
+- **Calico**: starting with 3.28 the v3 resource UID behavior changed. If you
+  have operators with OwnerReferences pointing to `projectcalico.org/v3`
+  resources, remove and recreate those references around an in-place upgrade.
+- **MetalLB**: this project installs application tag `v0.16.0`. A newer
+  chart-only tag such as `metallb-chart-0.16.1` is not an application or image
+  release and must not be used as the controller or speaker image tag.
 
 ## ⚙️ Kube Config
 
@@ -98,13 +163,21 @@ To copy your `kube config` locally so that you can access your **Kubernetes** cl
 ```bash
 scp debian@master_ip:/etc/rancher/k3s/k3s.yaml ~/.kube/config
 ```
-If you get file Permission denied, go into the node and temporarly run:
+If the copy fails with a permission error, grant the SSH user temporary read access using the least permissive method
+available for the target system. Restore the original ownership and permissions immediately after copying. Avoid
+world-writable permissions on the kubeconfig because it contains cluster credentials.
+
+For example, copy the file to a temporary user-readable path from the control node:
+
 ```bash
-sudo chmod 777 /etc/rancher/k3s/k3s.yaml
+ssh debian@master_ip 'sudo install -o "$(id -un)" -m 0600 /etc/rancher/k3s/k3s.yaml /tmp/k3s.yaml'
 ```
-Then copy with the scp command and reset the permissions back to:
+
+Copy `/tmp/k3s.yaml`, then remove the temporary remote copy:
+
 ```bash
-sudo chmod 600 /etc/rancher/k3s/k3s.yaml
+scp debian@master_ip:/tmp/k3s.yaml ~/.kube/config
+ssh debian@master_ip rm -f /tmp/k3s.yaml
 ```
 
 You'll then want to modify the config to point to master IP by running:
@@ -115,7 +188,7 @@ Then change `server: https://127.0.0.1:6443` to match your master IP: `server: h
 
 ### 🔨 Testing your cluster
 
-See the commands [here](https://technotim.live/posts/k3s-etcd-ansible/#testing-your-cluster).
+See the commands [here](https://technotim.com/posts/k3s-etcd-ansible/#testing-your-cluster).
 
 ### Variables
 
@@ -124,7 +197,7 @@ See the commands [here](https://technotim.live/posts/k3s-etcd-ansible/#testing-y
 | `download` | `k3s_version` | string | ❌ | Required | K3s binaries version |
 | `k3s_agent`, `k3s_server`, `k3s_server_post` | `apiserver_endpoint` | string | ❌ | Required | Virtual ip-address configured on each master |
 | `k3s_agent` | `extra_agent_args` | string | `null` | Not required | Extra arguments for agents nodes |
-| `k3s_agent`, `k3s_server` | `group_name_master` | string | `null` | Not required | Name othe master group |
+| `k3s_agent`, `k3s_server` | `group_name_master` | string | `null` | Not required | Name of the master group |
 | `k3s_agent` | `k3s_token` | string | `null` | Not required | Token used to communicate between masters |
 | `k3s_agent`, `k3s_server` | `proxy_env` | dict | `null` | Not required | Internet proxy configurations |
 | `k3s_agent`, `k3s_server` | `proxy_env.HTTP_PROXY` | string | ❌ | Required | HTTP internet proxy |
@@ -146,11 +219,14 @@ See the commands [here](https://technotim.live/posts/k3s-etcd-ansible/#testing-y
 | `k3s_server` | `kube_vip_bgp_peers` | list | `[]` | Not required | List of BGP peer ASN & address pairs |
 | `k3s_server` | `kube_vip_bgp_peers_groups` | list | `['k3s_master']` | Not required | Inventory group in which to search for additional `kube_vip_bgp_peers` parameters to merge. |
 | `k3s_server` | `kube_vip_iface` | string | `~` | Not required | Explicitly define an interface that ALL control nodes should use to propagate the VIP, define it here. Otherwise, kube-vip will determine the right interface automatically at runtime. |
-| `k3s_server` | `kube_vip_tag_version` | string | `v0.7.2` | Not required | Image tag for kube-vip |
-| `k3s_server` | `kube_vip_cloud_provider_tag_version` | string | `main` | Not required | Tag for kube-vip-cloud-provider manifest when enable |
+| `k3s_server` | `kube_vip_endpoint` | string | `~` | Not required | Overrides the internal address kube-vip binds/listens on, which can differ from the announced apiserver_endpoint for complex routing/tunnels. Defaults to apiserver_endpoint. |
+| `k3s_server` | `kube_vip_tag_version` | string | `v1.2.3` | Not required | Image tag for kube-vip |
+| `k3s_server` | `kube_vip_cloud_provider_tag_version` | string | `v0.0.12` | Not required | Tag for kube-vip-cloud-provider manifest when enable |
+| `k3s_server` | `kube_vip_enabled` | bool | `true` | Not required | Enable kube-vip install, covering both the control-plane VIP and the service load balancer. Set false to skip kube-vip entirely (single node or external LB). |
 | `k3s_server`, `k3_server_post` | `kube_vip_lb_ip_range` | string | `~` | Not required | IP range for kube-vip load balancer |
-| `k3s_server`, `k3s_server_post` | `metal_lb_controller_tag_version` | string | `v0.14.3` | Not required | Image tag for MetalLB |
-| `k3s_server` | `metal_lb_speaker_tag_version` | string | `v0.14.3` | Not required | Image tag for MetalLB |
+| `k3s_server`, `k3s_server_post` | `metal_lb_enabled` | bool | `true` | Not required | Enable MetalLB install for service load balancing. Set false to skip MetalLB (external LB). |
+| `k3s_server`, `k3s_server_post` | `metal_lb_controller_tag_version` | string | `v0.16.0` | Not required | Image tag for MetalLB |
+| `k3s_server` | `metal_lb_speaker_tag_version` | string | `v0.16.0` | Not required | Image tag for MetalLB |
 | `k3s_server` | `metal_lb_type` | string | `native` | Not required | Use FRR mode or native. Valid values are `frr` and `native` |
 | `k3s_server` | `retry_count` | int | `20` | Not required | Amount of retries when verifying that nodes joined |
 | `k3s_server` | `server_init_args` | string | ❌ | Not required | Arguments for server nodes |
@@ -162,7 +238,7 @@ See the commands [here](https://technotim.live/posts/k3s-etcd-ansible/#testing-y
 | `k3s_server_post` | `calico_natOutgoing` | string | `Enabled` | Not required | IP pool NAT outgoing |
 | `k3s_server_post` | `calico_nodeSelector` | string | `all()` | Not required | IP pool node selector |
 | `k3s_server_post` | `calico_iface` | string | `~` | Not required | The network interface used for when Calico is enabled |
-| `k3s_server_post` | `calico_tag` | string | `v3.27.2` | Not required | Calico version tag |
+| `k3s_server_post` | `calico_tag` | string | `v3.32.1` | Not required | Calico version tag |
 | `k3s_server_post` | `cilium_bgp_my_asn` | int | `64513` | Not required | Local ASN for BGP peer |
 | `k3s_server_post` | `cilium_bgp_peer_asn` | int | `64512` | Not required | BGP peer ASN |
 | `k3s_server_post` | `cilium_bgp_peer_address` | string | `~` | Not required | BGP peer address |
@@ -171,20 +247,24 @@ See the commands [here](https://technotim.live/posts/k3s-etcd-ansible/#testing-y
 | `k3s_server_post` | `cilium_bgp_lb_cidr` | string | `192.168.31.0/24` | Not required | BGP load balancer IP range |
 | `k3s_server_post` | `cilium_exportPodCIDR` | bool | `true` | Not required | Export pod CIDR |
 | `k3s_server_post` | `cilium_hubble` | bool | `true` | Not required | Enable Cilium Hubble |
-| `k3s_server_post` | `cilium_hubble` | bool | `true` | Not required | Enable Cilium Hubble |
-| `k3s_server_post` | `cilium_mode` | string | `native` | Not required | Inner-node communication mode (choices are `native` and `routed`) |
+| `k3s_server_post` | `cilium_mode` | string | `native` | Not required | Inner-node communication mode (choices are `native` and `tunnel`; `routed` is a deprecated alias for `tunnel`) |
+| `k3s_server_post` | `cilium_tag` | string | `v1.20.0` | Not required | Cilium version tag |
+| `k3s_server_post` | `cilium_cli_tag` | string | `v0.19.7` | Not required | Cilium CLI version tag |
 | `k3s_server_post` | `cluster_cidr` | string | `10.52.0.0/16` | Not required | Inner-cluster IP range |
 | `k3s_server_post` | `enable_bpf_masquerade` | bool | `true` | Not required | Use IP masquerading |
 | `k3s_server_post` | `kube_proxy_replacement` | bool | `true` | Not required | Replace the native kube-proxy with Cilium |
 | `k3s_server_post` | `metal_lb_available_timeout` | string | `240s` | Not required | Wait for MetalLB resources |
 | `k3s_server_post` | `metal_lb_ip_range` | string | `192.168.30.80-192.168.30.90` | Not required | MetalLB ip range for load balancer |
-| `k3s_server_post` | `metal_lb_controller_tag_version` | string | `v0.14.3` | Not required | Image tag for MetalLB |
+| `k3s_server_post` | `metal_lb_controller_tag_version` | string | `v0.16.0` | Not required | Image tag for MetalLB |
 | `k3s_server_post` | `metal_lb_mode` | string | `layer2` | Not required | Metallb mode (choices are `bgp` and `layer2`) |
 | `k3s_server_post` | `metal_lb_bgp_my_asn` | string | `~` | Not required | BGP ASN configurations |
 | `k3s_server_post` | `metal_lb_bgp_peer_asn` | string | `~` | Not required | BGP peer ASN configurations |
 | `k3s_server_post` | `metal_lb_bgp_peer_address` | string | `~` | Not required | BGP peer address |
 | `lxc` | `custom_reboot_command` | string | `~` | Not required | Command to run on reboot |
+| `reboot` (playbook) | `concurrent_reboots` | int/string | `100%` | Not required | Number (or percentage) of nodes to reboot at a time for a staggered reboot |
+| `reboot` (playbook) | `wait_seconds_after_reboot` | int | `0` | Not required | Pause in seconds between staggered reboot batches |
 | `prereq` | `system_timezone` | string | `null` | Not required | Timezone to be set on all nodes |
+| `prereq` | `disable_swap` | bool | `true` | Not required | Disable swap on all cluster nodes (swapoff + comment out /etc/fstab swap entries), all-or-nothing |
 | `proxmox_lxc`, `reset_proxmox_lxc` | `proxmox_lxc_ct_ids` | list | ❌ | Required | Proxmox container ID list |
 | `raspberrypi` | `state` | string | `present` | Not required | Indicates whether the k3s prerequisites for Raspberry Pi should be set up (possible values are `present` and `absent`) |
 
@@ -200,9 +280,11 @@ It is run automatically in CI, but you can also run the tests locally.
 This might be helpful for quick feedback in a few cases.
 You can find more information about it [here](molecule/README.md).
 
-### Pre-commit Hooks
+### Pre-commit hooks
 
-This repo uses `pre-commit` and `pre-commit-hooks` to lint and fix common style and syntax errors.  Be sure to install python packages and then run `pre-commit install`.  For more information, see [pre-commit](https://pre-commit.com/)
+This repository uses `pre-commit` to check style, syntax, Ansible content, and shell scripts. Install the Python
+dependencies, run `pre-commit install` once, and run `pre-commit run --all-files` before submitting a change. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for the complete development workflow.
 
 ## 🌌 Ansible Galaxy
 

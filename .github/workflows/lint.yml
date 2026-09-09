@@ -5,24 +5,25 @@ on:
 jobs:
   pre-commit-ci:
     name: Pre-Commit
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     env:
-      PYTHON_VERSION: "3.11"
+      PYTHON_VERSION: "3.12"
 
     steps:
       - name: Check out the codebase
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # 4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # 7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Set up Python ${{ env.PYTHON_VERSION }}
-        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # 5.3.0
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # 7.0.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: 'pip' # caching pip dependencies
 
       - name: Restore Ansible cache
-        uses: actions/cache/restore@6849a6489940f00c2f30c0fb92c6274307ccb58a # 4.1.2
+        id: cache-ansible
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # 6.1.0
         with:
           path: ~/.ansible/collections
           key: ansible-${{ hashFiles('collections/requirements.yml') }}
@@ -37,17 +38,37 @@ jobs:
           python3 -m pip install -r requirements.txt
           echo "::endgroup::"
 
+      - name: Install Ansible collections with retries
+        if: steps.cache-ansible.outputs.cache-hit != 'true'
+        run: |
+          set -Eeuo pipefail
+          for attempt in 1 2 3 4 5; do
+            if ansible-galaxy collection install -r collections/requirements.yml; then
+              exit 0
+            fi
+            echo "Ansible Galaxy attempt ${attempt} failed; retrying."
+            sleep $((attempt * 10))
+          done
+          exit 1
+
+      - name: Save Ansible collection cache
+        if: steps.cache-ansible.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # 6.1.0
+        with:
+          path: ~/.ansible/collections
+          key: ansible-${{ hashFiles('collections/requirements.yml') }}
+
       - name: Run pre-commit
         uses: pre-commit/action@2c7b3805fd2a0fd8c1884dcaebf91fc102a13ecd # 3.0.1
 
   ensure-pinned-actions:
     name: Ensure SHA Pinned Actions
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # 4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # 7.0.1
       - name: Ensure SHA pinned actions
-        uses: zgosalvez/github-actions-ensure-sha-pinned-actions@38608ef4fb69adae7f1eac6eeb88e67b7d083bfd # 3.0.16
+        uses: zgosalvez/github-actions-ensure-sha-pinned-actions@c5fc58bd0be7a4b94b73ce40250322d5b838a108 # 5.0.7
         with:
           allowlist: |
             aws-actions/

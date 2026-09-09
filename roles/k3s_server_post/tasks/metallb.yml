@@ -40,8 +40,14 @@
 
 - name: Test metallb-system namespace
   ansible.builtin.command: >-
-    {{ k3s_kubectl_binary | default('k3s kubectl') }} -n metallb-system
+    {{ k3s_kubectl_binary | default('k3s kubectl') }} get namespace metallb-system
   changed_when: false
+  # The kube API can briefly return ServiceUnavailable while MetalLB converges,
+  # which would otherwise abort the whole converge play on a transient error.
+  register: metallb_namespace_result
+  until: metallb_namespace_result.rc == 0
+  retries: "{{ download_retries }}"
+  delay: "{{ download_delay }}"
   with_items: "{{ groups[group_name_master | default('master')] }}"
   run_once: true
 
@@ -54,6 +60,12 @@
     {% if item.condition | default(False) -%}{{ item.condition }}{%- endif %}
     --timeout='{{ metal_lb_available_timeout }}'
   changed_when: false
+  # The kube API can briefly return ServiceUnavailable while MetalLB converges,
+  # which would otherwise abort the whole converge play on a transient error.
+  register: metallb_wait_result
+  until: metallb_wait_result.rc == 0
+  retries: "{{ download_retries }}"
+  delay: "{{ download_delay }}"
   run_once: true
   with_items:
     - description: controller
@@ -85,22 +97,20 @@
 
 - name: Set metallb webhook service name
   ansible.builtin.set_fact:
-    metallb_webhook_service_name: >-
-      {{
-        (
-          (metal_lb_controller_tag_version | regex_replace('^v', ''))
-          is
-          version('0.14.4', '<', version_type='semver')
-        ) | ternary(
-          'webhook-service',
-          'metallb-webhook-service'
-        )
-      }}
+    # Inspected the v0.16.0 manifest: the newer webhook Service name is used
+    # by every supported MetalLB release, so the old pre-0.14.4 branch is gone.
+    metallb_webhook_service_name: metallb-webhook-service
 
 - name: Test metallb-system webhook-service endpoint
   ansible.builtin.command: >-
     {{ k3s_kubectl_binary | default('k3s kubectl') }} -n metallb-system get endpoints {{ metallb_webhook_service_name }}
   changed_when: false
+  # The kube API can briefly return ServiceUnavailable while MetalLB converges,
+  # which would otherwise abort the whole converge play on a transient error.
+  register: metallb_webhook_result
+  until: metallb_webhook_result.rc == 0
+  retries: "{{ download_retries }}"
+  delay: "{{ download_delay }}"
   with_items: "{{ groups[group_name_master | default('master')] }}"
   run_once: true
 
@@ -120,6 +130,10 @@
   changed_when: false
   run_once: true
   when: metal_lb_mode == "layer2"
+  register: metallb_l2_test_result
+  until: metallb_l2_test_result.rc == 0
+  retries: "{{ download_retries }}"
+  delay: "{{ download_delay }}"
   with_items:
     - IPAddressPool
     - L2Advertisement
@@ -130,6 +144,10 @@
   changed_when: false
   run_once: true
   when: metal_lb_mode == "bgp"
+  register: metallb_bgp_test_result
+  until: metallb_bgp_test_result.rc == 0
+  retries: "{{ download_retries }}"
+  delay: "{{ download_delay }}"
   with_items:
     - IPAddressPool
     - BGPPeer

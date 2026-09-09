@@ -7,8 +7,9 @@ group_name_master: master
 
 kube_vip_arp: true
 kube_vip_iface:
-kube_vip_cloud_provider_tag_version: main
-kube_vip_tag_version: v0.7.2
+kube_vip_endpoint:
+kube_vip_cloud_provider_tag_version: v0.0.12
+kube_vip_tag_version: v1.2.3
 
 kube_vip_bgp: false
 kube_vip_bgp_routerid: 127.0.0.1
@@ -19,9 +20,18 @@ kube_vip_bgp_peeras: "64512"
 kube_vip_bgp_peers: []
 kube_vip_bgp_peers_groups: ['k3s_master']
 
-metal_lb_controller_tag_version: v0.14.3
-metal_lb_speaker_tag_version: v0.14.3
+kube_vip_enabled: true
+
+metal_lb_enabled: true
+metal_lb_controller_tag_version: v0.16.0
+metal_lb_speaker_tag_version: v0.16.0
 metal_lb_type: native
+
+# Shared retry/delay for remote manifest and asset downloads. The CI runner's
+# resolver intermittently times out on GitHub-hosted domains (helm.cilium.io,
+# raw.githubusercontent.com, github.com), so retry transient DNS/network failures.
+download_retries: 5
+download_delay: 10
 
 retry_count: 20
 
@@ -33,7 +43,7 @@ server_init_args: >-
     {% else %}
       --server https://{{ hostvars[groups[group_name_master | default('master')][0]].k3s_node_ip | split(",") | first | ansible.utils.ipwrap }}:6443
     {% endif %}
-    --token {{ k3s_token }}
+    --token {{ k3s_token | replace('%', '%%') }}
   {% endif %}
   {{ extra_server_args }}
 

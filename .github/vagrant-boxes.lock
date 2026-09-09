@@ -1,0 +1,4 @@
+# box version architecture
+bento/debian-13 202510.26.0 amd64
+bento/rockylinux-10.1 202512.01.0 amd64
+bento/ubuntu-26.04 202606.01.0 amd64

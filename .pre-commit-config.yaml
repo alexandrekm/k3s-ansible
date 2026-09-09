@@ -20,6 +20,9 @@ repos:
     rev: v6.22.2
     hooks:
       - id: ansible-lint
+        additional_dependencies: [ansible-core==2.18.0]
+        language_version: python3.12
+        args: [--offline]
   - repo: https://github.com/shellcheck-py/shellcheck-py
     rev: v0.9.0.6
     hooks:
@@ -33,3 +36,122 @@ repos:
     rev: 0.6.4
     hooks:
       - id: fix-smartquotes
+  - repo: local
+    hooks:
+      - id: cleanup-runner-resources-test
+        name: cleanup runner resources test
+        entry: .github/scripts/test-cleanup-runner-resources.sh
+        language: system
+        pass_filenames: false
+        files: ^\.github/scripts/(cleanup-runner-resources|test-cleanup-runner-resources)\.sh$
+      - id: download-vagrant-boxes-test
+        name: Vagrant box download test
+        entry: .github/test-download-boxes.sh
+        language: system
+        pass_filenames: false
+        files: ^\.github/(download-boxes|test-download-boxes)\.sh$|^\.github/vagrant-boxes\.lock$
+      - id: prepare-vagrant-box-masters-test
+        name: Vagrant box master preparation test
+        entry: .github/scripts/test-prepare-vagrant-box-masters.sh
+        language: system
+        pass_filenames: false
+        files: ^\.github/scripts/(prepare-vagrant-box-masters|test-prepare-vagrant-box-masters)\.sh$
+      - id: k3s-server-bootstrap-test
+        name: K3s transient bootstrap test
+        entry: .github/scripts/test-k3s-server-bootstrap.sh
+        language: system
+        pass_filenames: false
+        files: ^roles/k3s_server/tasks/(main|join_master)\.yml$|^\.github/scripts/test-k3s-server-bootstrap\.sh$
+      - id: unique-hostname-precheck-test
+        name: Unique hostname precheck test
+        entry: .github/scripts/test-unique-hostname-precheck.sh
+        language: system
+        pass_filenames: false
+        files: ^site\.yml$|^\.github/scripts/test-unique-hostname-precheck\.sh$
+      - id: disable-swap-test
+        name: Disable swap test
+        entry: .github/scripts/test-disable-swap.sh
+        language: system
+        pass_filenames: false
+        files: ^roles/prereq/(tasks/main|defaults/main)\.yml$|^\.github/scripts/test-disable-swap\.sh$
+      - id: cilium-bgp-manifest-test
+        name: Cilium BGP manifest test
+        entry: python3 .github/scripts/test-cilium-bgp-manifest.py
+        language: python
+        additional_dependencies:
+          - Jinja2>=3.1
+        pass_filenames: false
+        files: ^roles/k3s_server_post/templates/cilium\.crs\.j2$|^\.github/scripts/test-cilium-bgp-manifest\.py$
+      - id: cilium-envoy-toggle-test
+        name: Cilium Envoy toggle test
+        entry: python3 .github/scripts/test-cilium-envoy-toggle.py
+        language: python
+        additional_dependencies:
+          - Jinja2>=3.1
+          - PyYAML
+        pass_filenames: false
+        files: ^roles/k3s_server_post/tasks/cilium\.yml$|^\.github/scripts/test-cilium-envoy-toggle\.py$
+      - id: kube-vip-manifest-test
+        name: kube-vip manifest test
+        entry: python3 .github/scripts/test-kube-vip-manifest.py
+        language: python
+        additional_dependencies:
+          - Jinja2>=3.1
+        pass_filenames: false
+        files: ^roles/k3s_server/templates/vip\.yaml\.j2$|^\.github/scripts/test-kube-vip-manifest\.py$
+      - id: metallb-remote-read-test
+        name: MetalLB remote read test
+        entry: .github/scripts/test-metallb-remote-read.sh
+        language: system
+        pass_filenames: false
+        files: ^roles/k3s_server/tasks/metallb\.yml$|^\.github/scripts/test-metallb-remote-read\.sh$
+      - id: metallb-interfaces-test
+        name: MetalLB interfaces test
+        entry: python3 .github/scripts/test-metallb-interfaces.py
+        language: python
+        additional_dependencies:
+          - Jinja2>=3.1
+        pass_filenames: false
+        files: ^roles/k3s_server_post/templates/metallb\.crs\.j2$|^\.github/scripts/test-metallb-interfaces\.py$
+      - id: metallb-namespace-test
+        name: MetalLB namespace test
+        entry: python3 .github/scripts/test-metallb-namespace.py
+        language: python
+        additional_dependencies:
+          - PyYAML
+        pass_filenames: false
+        files: ^roles/k3s_server_post/tasks/metallb\.yml$|^\.github/scripts/test-metallb-namespace\.py$
+      - id: metallb-deploy-condition-test
+        name: MetalLB deploy condition test
+        entry: python3 .github/scripts/test-metallb-deploy-condition.py
+        language: python
+        additional_dependencies:
+          - Jinja2>=3.1
+          - PyYAML
+        pass_filenames: false
+        files: ^roles/k3s_server/tasks/main\.yml$|^roles/k3s_server_post/tasks/main\.yml$|^\.github/scripts/test-metallb-deploy-condition\.py$ # noqa yaml[line-length]
+      - id: kube-vip-deploy-condition-test
+        name: kube-vip deploy condition test
+        entry: python3 .github/scripts/test-kube-vip-deploy-condition.py
+        language: python
+        additional_dependencies:
+          - Jinja2>=3.1
+          - PyYAML
+        pass_filenames: false
+        files: ^roles/k3s_server/tasks/main\.yml$|^\.github/scripts/test-kube-vip-deploy-condition\.py$ # noqa yaml[line-length]
+      - id: default-interface-test
+        name: default interface test
+        entry: python3 .github/scripts/test-default-interface.py
+        language: python
+        additional_dependencies:
+          - Jinja2>=3.1
+        pass_filenames: false
+        files: ^inventory/sample/group_vars/all\.yml$|^\.github/scripts/test-default-interface\.py$
+      - id: verify-nginx-assert-test
+        name: verify nginx assert test
+        entry: python3 .github/scripts/test-verify-nginx-assert.py
+        language: python
+        additional_dependencies:
+          - PyYAML
+        pass_filenames: false
+        files: ^molecule/resources/verify_from_outside/tasks/test/deploy-example\.yml$|^\.github/scripts/test-verify-nginx-assert\.py$ # noqa yaml[line-length]

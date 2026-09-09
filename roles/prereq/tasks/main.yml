@@ -4,6 +4,28 @@
     name: "{{ system_timezone }}"
   when: (system_timezone is defined) and (system_timezone != "Your/Timezone")
 
+# k3s recommends swap be disabled on all nodes. Disabling swap is all-or-nothing
+# across the cluster: leaving it enabled on some nodes but not others creates
+# uneven scheduling/latency behavior. This block turns swap off and comments out
+# the swap entries in /etc/fstab so it stays off across reboots. It is idempotent
+# and a no-op when swap is already disabled or swapoff is unavailable.
+- name: Disable swap on all cluster nodes
+  when: disable_swap
+  block:
+    - name: Turn off swap now
+      ansible.builtin.command: swapoff -a
+      register: swapoff_result
+      changed_when: false
+      failed_when: false
+
+    - name: Comment out swap entries in fstab
+      ansible.builtin.replace:
+        path: /etc/fstab
+        regexp: '^([^#][^\n]*\s+swap\s+)'
+        replace: '# \\1'
+      register: fstab_swap
+
+
 - name: Set SELinux to disabled state
   ansible.posix.selinux:
     state: disabled
@@ -32,6 +54,35 @@
     state: present
     reload: true
   tags: sysctl
+
+- name: Check if br_netfilter module exists
+  ansible.builtin.shell: |
+    set -o pipefail
+    find /lib/modules/$(uname -r) -name "br_netfilter.ko*" | wc -l
+  args:
+    executable: /bin/bash
+  register: br_netfilter_exists
+  changed_when: false
+  when: ansible_os_family == "RedHat"
+  tags: sysctl
+
+- name: Install kernel-modules-extra if br_netfilter missing
+  ansible.builtin.yum:
+    name: "kernel-modules-extra-{{ ansible_kernel }}"
+    state: present
+    update_cache: true
+  register: kernel_modules_installed
+  when:
+    - ansible_os_family == "RedHat"
+    - br_netfilter_exists.stdout | int == 0
+
+- name: Reboot node if kernel modules package was installed
+  ansible.builtin.reboot:
+    msg: "Rebooting to apply new kernel modules package"
+    reboot_timeout: 300
+  when:
+    - ansible_os_family == "RedHat"
+    - kernel_modules_installed is changed
 
 - name: Add br_netfilter to /etc/modules-load.d/
   ansible.builtin.copy:

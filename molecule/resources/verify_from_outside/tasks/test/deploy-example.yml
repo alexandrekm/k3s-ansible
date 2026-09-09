@@ -32,17 +32,95 @@
         metallb_port: spec.ports[0].port
       register: nginx_services
 
+    - name: Wait for the load balancer address to be assigned
+      ansible.builtin.set_fact:
+        nginx_lb_ip: >-
+          {{
+            nginx_services.resources[0].status.loadBalancer.ingress[0].ip
+            if (nginx_services.resources | length > 0) and
+               (nginx_services.resources[0].status.loadBalancer.ingress is defined) and
+               (nginx_services.resources[0].status.loadBalancer.ingress | length > 0)
+            else ''
+          }}
+
+    - name: Retry until the load balancer service has an external IP
+      block:
+        - name: Refresh nginx service until it has an assigned address
+          kubernetes.core.k8s_info:
+            kind: service
+            name: nginx
+            namespace: "{{ testing_namespace }}"
+            kubeconfig: "{{ kubecfg_path }}"
+          register: nginx_lb_wait
+          until: >-
+            (nginx_lb_wait.resources | length > 0) and
+            (nginx_lb_wait.resources[0].status.loadBalancer.ingress is defined) and
+            (nginx_lb_wait.resources[0].status.loadBalancer.ingress | length > 0)
+          retries: 30
+          delay: 5
+
+        - name: Record the assigned load balancer address
+          ansible.builtin.set_fact:
+            nginx_lb_ip: >-
+              {{ nginx_lb_wait.resources[0].status.loadBalancer.ingress[0].ip }}
+
     - name: Assert that the nginx welcome page is available
       ansible.builtin.uri:
-        url: http://{{ ip | ansible.utils.ipwrap }}:{{ port_ }}/
+        url: http://{{ nginx_lb_ip | ansible.utils.ipwrap }}:{{ port_ }}/
         return_content: true
       register: result
-      failed_when: "'Welcome to nginx!' not in result.content"
+      # The MetalLB speaker announces the VIP on the host-only network, and the
+      # runner may briefly not see it in its ARP table yet. Retry so a transient
+      # announcement miss does not fail an otherwise healthy cluster, matching
+      # the load-balancer address wait above and the k3s_server_post metallb waits.
+      until:
+        - result.status is defined
+        - result.status == 200
+        - "'Welcome to nginx!' in result.content"
+      retries: 30
+      delay: 5
       vars:
-        ip: >-
-          {{ nginx_services.resources[0].status.loadBalancer.ingress[0].ip }}
         port_: >-
           {{ nginx_services.resources[0].spec.ports[0].port }}
+
+    - name: Initialize load balancer address range check
+      ansible.builtin.set_fact:
+        lb_addr_in_range: false
+        lb_ip_value: "{{ nginx_lb_ip }}"
+
+    - name: Check load balancer address against start-end pools
+      ansible.builtin.set_fact:
+        lb_addr_in_range: true
+      loop: "{{ verify_lb_ip_range }}"
+      loop_control:
+        label: "{{ item }}"
+      when:
+        - "'-' in item"
+        - "'/' not in item"
+        - >-
+          (lb_ip_value | ansible.utils.ipaddr('int') | int) >=
+          (item.split('-')[0] | ansible.utils.ipaddr('int') | int)
+        - >-
+          (lb_ip_value | ansible.utils.ipaddr('int') | int) <=
+          (item.split('-')[1] | ansible.utils.ipaddr('int') | int)
+
+    - name: Check load balancer address against CIDR pools
+      ansible.builtin.set_fact:
+        lb_addr_in_range: true
+      loop: "{{ verify_lb_ip_range }}"
+      loop_control:
+        label: "{{ item }}"
+      when:
+        - "'/' in item"
+        - (lb_ip_value | ansible.utils.ipaddr(item)) is string
+
+    - name: Assert that the load balancer address is within a configured pool
+      ansible.builtin.assert:
+        that: lb_addr_in_range
+        success_msg: "LoadBalancer address {{ lb_ip_value }} is in a configured range"
+        fail_msg: >-
+          LoadBalancer address {{ lb_ip_value }} is not in a configured
+          range {{ verify_lb_ip_range }}
   # Deactivated linter rules:
   #   - jinja[invalid]: As of version 6.6.0, ansible-lint complains that the input to ipwrap
   #                     would be undefined. This will not be the case during playbook execution.

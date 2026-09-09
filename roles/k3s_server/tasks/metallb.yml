@@ -15,6 +15,10 @@
     owner: root
     group: root
     mode: "0644"
+  register: metallb_manifest_download
+  retries: "{{ download_retries }}"
+  delay: "{{ download_delay }}"
+  until: metallb_manifest_download is succeeded
   when: ansible_hostname == hostvars[groups[group_name_master | default('master')][0]]['ansible_hostname']
 
 - name: Set image versions in manifest for metallb-{{ metal_lb_type }}
@@ -28,3 +32,29 @@
   loop_control:
     label: "{{ item.change }} => {{ item.to }}"
   when: ansible_hostname == hostvars[groups[group_name_master | default('master')][0]]['ansible_hostname']
+
+- name: Read back MetalLB manifest from first master
+  ansible.builtin.slurp:
+    src: /var/lib/rancher/k3s/server/manifests/metallb-crds.yaml
+  register: metallb_manifest
+  when: ansible_hostname == hostvars[groups[group_name_master | default('master')][0]]['ansible_hostname']
+
+- name: Check the MetalLB speaker image reference is present
+  ansible.builtin.set_fact:
+    metallb_manifest_has_speaker_tag: >-
+      {{
+        ('quay.io/metallb/speaker:' ~ metal_lb_speaker_tag_version) in
+        (metallb_manifest.content | default('') | b64decode)
+      }}
+  when: ansible_hostname == hostvars[groups[group_name_master | default('master')][0]]['ansible_hostname']
+
+- name: Fail if MetalLB speaker tag was not applied to the manifest
+  ansible.builtin.fail:
+    msg: >-
+      MetalLB speaker image reference
+      quay.io/metallb/speaker:{{ metal_lb_speaker_tag_version }}
+      was not found in the downloaded manifest. The upstream image
+      reference may have changed.
+  when:
+    - ansible_hostname == hostvars[groups[group_name_master | default('master')][0]]['ansible_hostname']
+    - not metallb_manifest_has_speaker_tag

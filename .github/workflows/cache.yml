@@ -5,38 +5,53 @@ on:
 jobs:
   molecule:
     name: cache
-    runs-on: self-hosted
+    runs-on: [self-hosted, linux, x64, k3s-ci, virtualbox, nested-virt]
     env:
       PYTHON_VERSION: "3.11"
+      VAGRANT_DEFAULT_PROVIDER: virtualbox
+      VAGRANT_HOME: ${{ github.workspace }}/.vagrant-home
 
     steps:
       - name: Check out the codebase
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # 4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # 7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Check nested VirtualBox platform
+        run: |
+          set -Eeuo pipefail
+          grep -Eq 'vmx|svm' /proc/cpuinfo
+          test -c /dev/kvm
+          test -c /dev/vboxdrv
+          VBoxManage --version
+          vagrant --version
+          test -r /etc/vbox/networks.conf
+          test "$(stat -c '%u' /etc/vbox/networks.conf)" -eq 0
+          free -h
+          df -Pk "${RUNNER_TEMP}"
 
       - name: Set up Python ${{ env.PYTHON_VERSION }}
-        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # 5.3.0
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # 7.0.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: 'pip' # caching pip dependencies
 
       - name: Cache Vagrant boxes
         id: cache-vagrant
-        uses: actions/cache@6849a6489940f00c2f30c0fb92c6274307ccb58a # 4.1.2
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # 6.1.0
         with:
-          lookup-only: true #if it exists, we don't need to restore and can skip the next step
+          # This producer only needs to know whether the immutable cache exists.
+          # Molecule jobs restore it after this job completes.
+          lookup-only: true
           path: |
-            ~/.vagrant.d/boxes
-          key: vagrant-boxes-${{ hashFiles('**/molecule.yml') }}
-          restore-keys: |
-            vagrant-boxes
+            .vagrant-home/boxes
+          key: vagrant-boxes-${{ runner.name }}-${{ runner.os }}-${{ runner.arch }}-virtualbox-7.2-vagrant-2.4-${{ hashFiles('.github/vagrant-boxes.lock') }} # yamllint disable-line rule:line-length
 
       - name: Download Vagrant boxes for all scenarios
-        # To save some cache space, all scenarios share the same cache key.
-        # On the other hand, this means that the cache contents should be
-        # the same across all scenarios. This step ensures that.
-        if: steps.cache-vagrant.outputs.cache-hit != 'true' # only run if false since this is just a cache step
+        # An exact hit skips both cache restoration and upstream downloads.
+        # A lock change builds and saves one clean, version-pinned cache.
+        if: steps.cache-vagrant.outputs.cache-hit != 'true'
         run: |
           ./.github/download-boxes.sh
+          ./.github/scripts/prepare-vagrant-box-masters.sh
           vagrant box list

@@ -3,68 +3,73 @@ dependency:
   name: galaxy
 driver:
   name: vagrant
+  # The Vagrant driver warns that parallel VirtualBox creation can cause
+  # platform issues. Keep this five-node, mixed-distribution scenario serial.
+  parallel: false
 platforms:
   - name: control1
-    box: generic/ubuntu2204
+    box: bento/ubuntu-26.04
     memory: 1024
     cpus: 2
     groups:
       - k3s_cluster
       - master
+    # Keep adapter 2 stable across linked-clone rebuilds so stale host-only
+    # neighbor state still identifies the current scenario guest.
+    provider_raw_config_args:
+      - "customize ['modifyvm', :id, '--mac-address2', '080027A13038']"
     interfaces:
       - network_name: private_network
         ip: 192.168.30.38
-    config_options:
-      # We currently can not use public-key based authentication on Ubuntu 22.04,
-      # see: https://github.com/chef/bento/issues/1405
-      ssh.username: vagrant
-      ssh.password: vagrant
 
   - name: control2
-    box: generic/debian12
+    box: bento/debian-13
     memory: 1024
     cpus: 2
     groups:
       - k3s_cluster
       - master
+    provider_raw_config_args:
+      - "customize ['modifyvm', :id, '--mac-address2', '080027A13039']"
     interfaces:
       - network_name: private_network
         ip: 192.168.30.39
 
   - name: control3
-    box: generic/rocky9
+    box: bento/rockylinux-10.1
     memory: 1024
     cpus: 2
     groups:
       - k3s_cluster
       - master
+    provider_raw_config_args:
+      - "customize ['modifyvm', :id, '--mac-address2', '080027A13040']"
     interfaces:
       - network_name: private_network
         ip: 192.168.30.40
 
   - name: node1
-    box: generic/ubuntu2204
+    box: bento/ubuntu-26.04
     memory: 1024
     cpus: 2
     groups:
       - k3s_cluster
       - node
+    provider_raw_config_args:
+      - "customize ['modifyvm', :id, '--mac-address2', '080027A13041']"
     interfaces:
       - network_name: private_network
         ip: 192.168.30.41
-    config_options:
-      # We currently can not use public-key based authentication on Ubuntu 22.04,
-      # see: https://github.com/chef/bento/issues/1405
-      ssh.username: vagrant
-      ssh.password: vagrant
 
   - name: node2
-    box: generic/rocky9
+    box: bento/rockylinux-10.1
     memory: 1024
     cpus: 2
     groups:
       - k3s_cluster
       - node
+    provider_raw_config_args:
+      - "customize ['modifyvm', :id, '--mac-address2', '080027A13042']"
     interfaces:
       - network_name: private_network
         ip: 192.168.30.42
@@ -74,6 +79,7 @@ provisioner:
   env:
     ANSIBLE_VERBOSITY: 1
   playbooks:
+    create: create.yml
     converge: ../resources/converge.yml
     side_effect: ../resources/reset.yml
     verify: ../resources/verify.yml

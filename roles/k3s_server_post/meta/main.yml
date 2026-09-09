@@ -43,7 +43,7 @@ argument_specs:
 
       calico_tag:
         description: Calico version tag
-        default: v3.27.2
+        default: v3.32.1
 
       cilium_bgp:
         description:
@@ -93,11 +93,23 @@ argument_specs:
         default: ~
 
       cilium_mode:
-        description: Inner-node communication mode
+        description:
+          - Inner-node communication mode.
+          - Cilium accepts `native` or `tunnel`. `routed` is accepted as a
+            legacy alias and is mapped to `tunnel` at install time.
         default: native
         choices:
           - native
+          - tunnel
           - routed
+
+      cilium_tag:
+        description: Cilium version tag
+        default: v1.20.0
+
+      cilium_cli_tag:
+        description: Cilium CLI version tag
+        default: v0.19.7
 
       cluster_cidr:
         description: Inner-cluster IP range
@@ -121,6 +133,13 @@ argument_specs:
         description: IP range for kube-vip load balancer
         default: ~
 
+      metal_lb_enabled:
+        description:
+          - Enable installing the MetalLB pool for service load balancing.
+          - Set false to skip MetalLB, for example when an external load balancer is used.
+        default: true
+        type: bool
+
       metal_lb_available_timeout:
         description: Wait for MetalLB resources
         default: 240s
@@ -129,9 +148,17 @@ argument_specs:
         description: MetalLB ip range for load balancer
         default: 192.168.30.80-192.168.30.90
 
+      metal_lb_interfaces:
+        description: >-
+          List of network interfaces on which MetalLB should announce the
+          load balancer IPs in layer2 mode. When empty (default), MetalLB
+          announces on all interfaces.
+        type: list
+        default: []
+
       metal_lb_controller_tag_version:
         description: Image tag for MetalLB
-        default: v0.14.3
+        default: v0.16.0
 
       metal_lb_mode:
         description: Metallb mode

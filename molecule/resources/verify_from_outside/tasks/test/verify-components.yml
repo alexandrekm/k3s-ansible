@@ -1,0 +1,354 @@
+---
+# Scenario-aware verification of cluster components and their live image tags.
+# Scenario identity (verify_cni / verify_lb) and expected address range come
+# from each scenario's verify-vars.yml, which is plain inventory data available
+# to the verify play. Converge-time set_fact values are not persisted between
+# the two Ansible processes, so they are never used here.
+- name: Verify cluster components report expected versions
+  block:
+    - name: Get all nodes with their kubelet versions
+      kubernetes.core.k8s_info:
+        kind: node
+        kubeconfig: "{{ kubecfg_path }}"
+      register: verify_nodes
+
+    - name: Assert each node reports the expected Kubernetes version
+      ansible.builtin.assert:
+        that: item.status.nodeInfo.kubeletVersion == k3s_version
+        success_msg: "{{ item.metadata.name }} reports {{ k3s_version }}"
+        fail_msg: >-
+          {{ item.metadata.name }} reports
+          {{ item.status.nodeInfo.kubeletVersion }},
+          expected {{ k3s_version }}
+      loop: "{{ verify_nodes.resources }}"
+      loop_control:
+        label: "{{ item.metadata.name }}"
+
+    - name: Verify Flannel is the active CNI
+      when: verify_cni == 'flannel'
+      block:
+        - name: Assert every node reports Ready
+          ansible.builtin.assert:
+            that: item.status.conditions
+              | selectattr('type', 'equalto', 'Ready')
+              | map(attribute='status') | first | default('') == 'True'
+            success_msg: "{{ item.metadata.name }} is Ready"
+            fail_msg: "{{ item.metadata.name }} is not Ready"
+          loop: "{{ verify_nodes.resources }}"
+          loop_control:
+            label: "{{ item.metadata.name }} ready"
+
+        - name: Assert every node registered a node IP from its interface
+          # Each k3s node is launched with --node-ip derived from flannel_iface.
+          # Confirm every node carries a real InternalIP (not a loopback), which
+          # proves k3s bound to the cluster interface rather than defaulting to 127.0.0.1.
+          ansible.builtin.assert:
+            that: >-
+              (node_internal_ips | length) >= 1 and
+              (node_internal_ips | reject('eq', '127.0.0.1') | list | length) == node_internal_ips | length
+            success_msg: "{{ item.metadata.name }} is bound to {{ node_internal_ips | join(', ') }}"
+            fail_msg: >-
+              {{ item.metadata.name }} has no non-loopback InternalIP
+              (got: {{ node_internal_ips | join(', ') }})
+          vars:
+            node_internal_ips: >-
+              {{
+                (item.status.addresses | default([]))
+                | selectattr('type', 'equalto', 'InternalIP')
+                | map(attribute='address')
+                | list
+              }}
+          loop: "{{ verify_nodes.resources }}"
+          loop_control:
+            label: "{{ item.metadata.name }} InternalIP"
+
+        - name: Get any Calico namespaces with Flannel enabled
+          kubernetes.core.k8s_info:
+            kind: Namespace
+            name: calico-system
+            kubeconfig: "{{ kubecfg_path }}"
+          register: flannel_calico_absent
+
+        - name: Assert there is no Calico system namespace
+          ansible.builtin.assert:
+            that: flannel_calico_absent.resources | length == 0
+            success_msg: "No Calico present with Flannel"
+            fail_msg: "A Calico namespace exists alongside Flannel"
+
+        - name: Get the Cilium namespace with Flannel enabled
+          kubernetes.core.k8s_info:
+            kind: Namespace
+            name: cilium
+            kubeconfig: "{{ kubecfg_path }}"
+          register: flannel_cilium
+
+        - name: Assert the Cilium namespace is absent
+          ansible.builtin.assert:
+            that: flannel_cilium.resources | length == 0
+            success_msg: "No Cilium present with Flannel"
+            fail_msg: "A Cilium namespace exists alongside Flannel"
+
+    - name: Verify Calico is the active CNI
+      when: verify_cni == 'calico'
+      block:
+        - name: Get the Calico node DaemonSet image
+          kubernetes.core.k8s_info:
+            kind: DaemonSet
+            name: calico-node
+            namespace: calico-system
+            kubeconfig: "{{ kubecfg_path }}"
+          register: calico_node_ds
+
+        - name: Assert the Calico node image uses the expected tag
+          ansible.builtin.assert:
+            that:
+              - calico_node_ds.resources | length == 1
+              - calico_node_image | regex_search(':' ~ calico_tag) is not none
+            success_msg: "Calico node image uses tag {{ calico_tag }}"
+            fail_msg: >-
+              Calico node image {{ calico_node_image }},
+              expected {{ calico_tag }}
+          vars:
+            calico_node_image: "{{ calico_node_ds.resources[0].spec.template.spec.containers[0].image }}"
+
+        - name: Get Calico TigeraStatus for calico and apiserver
+          kubernetes.core.k8s_info:
+            api_version: operator.tigera.io/v1
+            kind: TigeraStatus
+            name: "{{ item }}"
+            kubeconfig: "{{ kubecfg_path }}"
+          register: calico_tigerastatus
+          loop:
+            - calico
+            - apiserver
+          loop_control:
+            label: "Tigerastatus/{{ item }}"
+
+        - name: Assert Calico TigeraStatus reports Available
+          ansible.builtin.assert:
+            that: >-
+              item.resources | length == 1 and
+              (item.resources[0].status.conditions
+               | selectattr('type', 'equalto', 'Available')
+               | map(attribute='status') | first | default('')) == 'True'
+            success_msg: "Tigerastatus {{ item.resources[0].metadata.name }} is Available"
+            fail_msg: "Tigerastatus is not Available"
+          loop: "{{ calico_tigerastatus.results }}"
+          loop_control:
+            label: "Tigerastatus Available"
+
+        - name: Get any Flannel DaemonSets with Calico enabled
+          kubernetes.core.k8s_info:
+            kind: DaemonSet
+            namespace: kube-flannel
+            kubeconfig: "{{ kubecfg_path }}"
+          register: no_flannel_ds
+
+        - name: Assert there are no Flannel DaemonSets
+          ansible.builtin.assert:
+            that: no_flannel_ds.resources | length == 0
+            success_msg: "No Flannel DaemonSet present with Calico"
+            fail_msg: "A Flannel DaemonSet exists alongside Calico"
+
+    - name: Verify Cilium is the active CNI
+      when: verify_cni == 'cilium'
+      block:
+        - name: Get the Cilium agent and operator images
+          kubernetes.core.k8s_info:
+            kind: "{{ item.kind }}"
+            name: "{{ item.name }}"
+            namespace: kube-system
+            kubeconfig: "{{ kubecfg_path }}"
+          register: cilium_info
+          loop:
+            - { kind: DaemonSet, name: cilium }
+            - { kind: Deployment, name: cilium-operator }
+          loop_control:
+            label: "{{ item.kind }}/{{ item.name }}"
+
+        - name: Assert Cilium agent and operator use the expected image tag
+          ansible.builtin.assert:
+            that:
+              - cilium_agent_image | regex_search(':' ~ cilium_tag) is not none
+              - cilium_operator_image | regex_search(':' ~ cilium_tag) is not none
+            success_msg: "Cilium agent and operator use {{ cilium_tag }}"
+            fail_msg: >-
+              Cilium agent {{ cilium_agent_image }},
+              operator {{ cilium_operator_image }},
+              expected {{ cilium_tag }}
+          vars:
+            cilium_agent_image: >-
+              {{ (cilium_info.results
+                  | selectattr('resources', 'defined')
+                  | map(attribute='resources')
+                  | list
+                  | map(attribute='0')
+                  | selectattr('kind', 'equalto', 'DaemonSet')
+                  | list)[0].spec.template.spec.containers[0].image }}
+            cilium_operator_image: >-
+              {{ (cilium_info.results
+                  | selectattr('resources', 'defined')
+                  | map(attribute='resources')
+                  | list
+                  | map(attribute='0')
+                  | selectattr('kind', 'equalto', 'Deployment')
+                  | list)[0].spec.template.spec.containers[0].image }}
+
+        - name: Get Hubble relay and UI deployments when enabled
+          kubernetes.core.k8s_info:
+            kind: Deployment
+            name: "{{ item }}"
+            namespace: kube-system
+            kubeconfig: "{{ kubecfg_path }}"
+          register: hubble_info
+          loop:
+            - hubble-relay
+            - hubble-ui
+          loop_control:
+            label: "Deployment/{{ item }}"
+          when: cilium_hubble | bool
+
+        - name: Assert Hubble components are Ready when enabled
+          ansible.builtin.assert:
+            that:
+              - item.resources | length == 1
+              - item.resources[0].status.readyReplicas | default(0) >= 1
+            success_msg: "Hubble deployment {{ item.resources[0].metadata.name }} is Ready"
+            fail_msg: "Hubble deployment is not Ready"
+          loop: "{{ hubble_info.results }}"
+          loop_control:
+            label: "Hubble deployment"
+          when: cilium_hubble | bool
+
+        - name: Get any Flannel DaemonSets with Cilium enabled
+          kubernetes.core.k8s_info:
+            kind: DaemonSet
+            namespace: kube-flannel
+            kubeconfig: "{{ kubecfg_path }}"
+          register: no_flannel_ds_cilium
+
+        - name: Assert there are no Flannel DaemonSets
+          ansible.builtin.assert:
+            that: no_flannel_ds_cilium.resources | length == 0
+            success_msg: "No Flannel DaemonSet present with Cilium"
+            fail_msg: "A Flannel DaemonSet exists alongside Cilium"
+
+    - name: Verify MetalLB is the active load balancer
+      when: verify_lb == 'metallb'
+      block:
+        - name: Get the MetalLB controller and speaker images
+          kubernetes.core.k8s_info:
+            kind: "{{ item.kind }}"
+            name: "{{ item.name }}"
+            namespace: metallb-system
+            kubeconfig: "{{ kubecfg_path }}"
+          register: metallb_info
+          until: metallb_info.resources | length > 0
+          retries: 15
+          delay: 10
+          loop:
+            - { kind: Deployment, name: controller }
+            - { kind: DaemonSet, name: speaker }
+          loop_control:
+            label: "{{ item.kind }}/{{ item.name }}"
+
+        - name: Fail with a clear message if MetalLB resources are missing
+          ansible.builtin.fail:
+            msg: >-
+              Did not find {{ item.kind | lower }} {{ item.name }} in
+              metallb-system. Expected MetalLB to be deployed in this
+              scenario (verify_lb: {{ verify_lb }}).
+          when: item.resources | length == 0
+          loop: "{{ metallb_info.results }}"
+          loop_control:
+            label: "{{ item.item.kind }}/{{ item.item.name }}"
+
+        - name: Assert MetalLB controller and speaker use the expected image tags
+          ansible.builtin.assert:
+            # regex_search returns a string or none; check for a match with `is not
+            # none` so the assertion is a real boolean (ansible-core 2.19 rejects
+            # string conditionals and `| bool` deprecates string coercion).
+            that:
+              - controller_image | regex_search(metal_lb_controller_tag_version) is not none
+              - speaker_image | regex_search(metal_lb_speaker_tag_version) is not none
+            success_msg: >-
+              MetalLB controller {{ metal_lb_controller_tag_version }},
+              speaker {{ metal_lb_speaker_tag_version }}
+            fail_msg: >-
+              MetalLB controller {{ controller_image }},
+              speaker {{ speaker_image }}
+          vars:
+            controller_image: >-
+              {{ (metallb_info.results
+                  | selectattr('resources', 'defined')
+                  | map(attribute='resources')
+                  | list
+                  | map(attribute='0')
+                  | selectattr('kind', 'equalto', 'Deployment')
+                  | list)[0].spec.template.spec.containers[0].image }}
+            speaker_image: >-
+              {{ (metallb_info.results
+                  | selectattr('resources', 'defined')
+                  | map(attribute='resources')
+                  | list
+                  | map(attribute='0')
+                  | selectattr('kind', 'equalto', 'DaemonSet')
+                  | list)[0].spec.template.spec.containers[0].image }}
+
+    - name: Verify kube-vip is the active load balancer
+      when: verify_lb == 'kube-vip'
+      block:
+        - name: Get the kube-vip and cloud provider images
+          kubernetes.core.k8s_info:
+            kind: "{{ item.kind }}"
+            name: "{{ item.name }}"
+            namespace: kube-system
+            kubeconfig: "{{ kubecfg_path }}"
+          register: kubevip_info
+          loop:
+            - { kind: DaemonSet, name: kube-vip-ds }
+            - { kind: Deployment, name: kube-vip-cloud-provider }
+          loop_control:
+            label: "{{ item.kind }}/{{ item.name }}"
+
+        - name: Assert the kube-vip and cloud provider image tags
+          ansible.builtin.assert:
+            that:
+              - kubevip_image | regex_search(':' ~ kube_vip_tag_version) is not none
+              - cloud_provider_image | regex_search(verify_kube_vip_cloud_provider_tag) is not none
+            success_msg: >-
+              kube-vip {{ kube_vip_tag_version }},
+              cloud provider {{ verify_kube_vip_cloud_provider_tag }}
+            fail_msg: >-
+              kube-vip {{ kubevip_image }},
+              cloud provider {{ cloud_provider_image }}
+          vars:
+            kubevip_image: >-
+              {{ (kubevip_info.results
+                  | selectattr('resources', 'defined')
+                  | map(attribute='resources')
+                  | list
+                  | map(attribute='0')
+                  | selectattr('kind', 'equalto', 'DaemonSet')
+                  | list)[0].spec.template.spec.containers[0].image }}
+            cloud_provider_image: >-
+              {{ (kubevip_info.results
+                  | selectattr('resources', 'defined')
+                  | map(attribute='resources')
+                  | list
+                  | map(attribute='0')
+                  | selectattr('kind', 'equalto', 'Deployment')
+                  | list)[0].spec.template.spec.containers[0].image }}
+
+        - name: Get the MetalLB namespace with kube-vip enabled
+          kubernetes.core.k8s_info:
+            kind: Namespace
+            name: metallb-system
+            kubeconfig: "{{ kubecfg_path }}"
+          register: metallb_absent
+
+        - name: Assert the MetalLB namespace does not exist
+          ansible.builtin.assert:
+            that: metallb_absent.resources | length == 0
+            success_msg: "MetalLB is not installed with kube-vip"
+            fail_msg: "MetalLB namespace exists alongside kube-vip"

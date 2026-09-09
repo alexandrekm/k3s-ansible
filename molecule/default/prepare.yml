@@ -5,18 +5,137 @@
 
 - name: Network setup
   hosts: all
+  vars:
+    primary_master: "{{ groups[group_name_master | default('master')][0] }}"
+    primary_cluster_ip: >-
+      {{ hostvars[primary_master].k3s_node_ip | split(',') | first }}
+    cluster_interface: >-
+      {{ cilium_iface | default(calico_iface | default(flannel_iface)) }}
+    primary_cluster_interface: >-
+      {{ hostvars[primary_master].cilium_iface
+      | default(hostvars[primary_master].calico_iface
+      | default(hostvars[primary_master].flannel_iface)) }}
+    primary_cluster_mac: >-
+      {{ hostvars[primary_master].ansible_facts[primary_cluster_interface].macaddress }}
   tasks:
-    - name: Disable firewalld
-      when: ansible_distribution == "Rocky"
-      # Rocky Linux comes with firewalld enabled. It blocks some of the network
-      # connections needed for our k3s cluster. For our test setup, we just disable
-      # it since the VM host's firewall is still active for connections to and from
-      # the Internet.
+    - name: Gather service facts
+      ansible.builtin.service_facts:
+
+    - name: Disable guest firewall services
+      # The disposable test guests use an isolated VirtualBox network. A distro
+      # firewall can allow ICMP while silently blocking the inter-node Kubernetes
+      # API connection, so disable the known guest firewalls consistently.
       # When building your own cluster, please DO NOT blindly copy this. Instead,
       # please create a custom firewall configuration that fits your network design
       # and security needs.
       ansible.builtin.systemd:
-        name: firewalld
+        name: "{{ item }}"
         enabled: false
         state: stopped
       become: true
+      loop:
+        - firewalld.service
+        - nftables.service
+        - ufw.service
+      when: item in ansible_facts.services
+
+    - name: Verify the private cluster interface
+      ansible.builtin.assert:
+        that:
+          - flannel_iface in ansible_facts
+          - ansible_facts[flannel_iface].ipv4 is defined
+          - ansible_facts[flannel_iface].ipv4.address is defined
+        fail_msg: >-
+          The Vagrant private interface {{ flannel_iface }} does not have an
+          IPv4 address on {{ inventory_hostname }}.
+
+    - name: Pin disposable cluster peer neighbor entries
+      ansible.builtin.command:
+        argv:
+          - ip
+          - neigh
+          - replace
+          - "{{ peer_cluster_ip }}"
+          - lladdr
+          - "{{ peer_cluster_mac }}"
+          - nud
+          - permanent
+          - dev
+          - "{{ cluster_interface }}"
+      become: true
+      changed_when: false
+      loop: "{{ groups['k3s_cluster'] }}"
+      loop_control:
+        label: "{{ inventory_hostname }} -> {{ item }}"
+      vars:
+        peer_cluster_interface: >-
+          {{ hostvars[item].cilium_iface
+          | default(hostvars[item].calico_iface
+          | default(hostvars[item].flannel_iface)) }}
+        peer_cluster_ip: >-
+          {{ hostvars[item].k3s_node_ip | split(',') | first }}
+        peer_cluster_mac: >-
+          {{ hostvars[item].ansible_facts[peer_cluster_interface].macaddress }}
+      when: item != inventory_hostname
+
+    - name: Verify guest-to-guest cluster network reachability
+      ansible.builtin.command:
+        argv:
+          - ping
+          - -c
+          - "1"
+          - -W
+          - "1"
+          - "{{ primary_cluster_ip }}"
+      register: primary_cluster_ping
+      until: primary_cluster_ping.rc == 0
+      retries: 6
+      delay: 2
+      changed_when: false
+
+    - name: Read the primary neighbor entry
+      ansible.builtin.command:
+        argv:
+          - ip
+          - neigh
+          - show
+          - to
+          - "{{ primary_cluster_ip }}"
+          - dev
+          - "{{ cluster_interface }}"
+      register: primary_cluster_neighbor
+      changed_when: false
+      when: inventory_hostname != primary_master
+
+    - name: Verify the primary neighbor identity
+      ansible.builtin.assert:
+        that:
+          - (primary_cluster_mac | lower) in (primary_cluster_neighbor.stdout | lower)
+        fail_msg: >-
+          {{ inventory_hostname }} resolved primary {{ primary_cluster_ip }} to
+          an unexpected MAC on {{ cluster_interface }}. Expected
+          {{ primary_cluster_mac }}, got: {{ primary_cluster_neighbor.stdout }}
+      when: inventory_hostname != primary_master
+
+    - name: Verify GitHub release host DNS
+      ansible.builtin.getent:
+        database: hosts
+        key: github.com
+      register: github_dns
+      retries: 6
+      delay: 5
+      until: github_dns is succeeded
+
+    - name: Verify k3s checksum URL is reachable
+      ansible.builtin.uri:
+        url: >-
+          https://github.com/k3s-io/k3s/releases/download/{{ k3s_version
+          }}/sha256sum-amd64.txt
+        method: HEAD
+        follow_redirects: safe
+        status_code: [200, 302]
+        timeout: 15
+      register: k3s_checksum_request
+      retries: 3
+      delay: 5
+      until: k3s_checksum_request.status in [200, 302]

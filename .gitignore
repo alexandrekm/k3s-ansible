@@ -1,5 +1,7 @@
 .env/
 *.log
 #ansible.cfg
+.ansible/
 kubeconfig
 .vault_pass
+zIgnore/
