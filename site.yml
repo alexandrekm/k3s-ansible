@@ -15,11 +15,11 @@
           k3s nodes must have unique hostnames. Found a duplicate in:
           {{ cluster_hostnames | unique }}. Each node registers in the cluster
           keyed by its hostname, so matching hostnames prevent nodes from joining.
+      vars:
         cluster_hostnames: >-
           {{
             groups['k3s_cluster']
             | map('extract', hostvars, 'ansible_hostname')
-            # only hosts with gathered facts (e.g. --limit runs) are checked
             | select('defined')
             | list
           }}
