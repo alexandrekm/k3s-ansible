@@ -23,10 +23,16 @@
   when: proxy_env is defined
 
 - name: Deploy vip manifest
-  ansible.builtin.include_tasks: vip.yml
+  ansible.builtin.include_tasks:
+    file: vip.yml
+    apply:
+      tags: [kubevip]
   when: kube_vip_enabled
 - name: Deploy metallb manifest
-  ansible.builtin.include_tasks: metallb.yml
+  ansible.builtin.include_tasks:
+    file: metallb.yml
+    apply:
+      tags: [metallb]
   tags: metallb
   # Deploy MetalLB unless explicitly disabled, kube-vip owns the load balancer
   # IP range, or Cilium BGP is enabled (Cilium then provides its own load
@@ -36,7 +42,10 @@
   when: metal_lb_enabled and kube_vip_lb_ip_range is not defined and not (cilium_bgp | default(false) | bool)
 
 - name: Deploy kube-vip manifest
-  ansible.builtin.include_tasks: kube-vip.yml
+  ansible.builtin.include_tasks:
+    file: kube-vip.yml
+    apply:
+      tags: [kubevip]
   tags: kubevip
   when: kube_vip_enabled and kube_vip_lb_ip_range is defined
 

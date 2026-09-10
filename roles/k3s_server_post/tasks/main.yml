@@ -1,16 +1,25 @@
 ---
 - name: Deploy calico
-  ansible.builtin.include_tasks: calico.yml
+  ansible.builtin.include_tasks:
+    file: calico.yml
+    apply:
+      tags: [calico]
   tags: calico
   when: calico_iface is defined and cilium_iface is not defined
 
 - name: Deploy cilium
-  ansible.builtin.include_tasks: cilium.yml
+  ansible.builtin.include_tasks:
+    file: cilium.yml
+    apply:
+      tags: [cilium]
   tags: cilium
   when: cilium_iface is defined
 
 - name: Deploy metallb pool
-  ansible.builtin.include_tasks: metallb.yml
+  ansible.builtin.include_tasks:
+    file: metallb.yml
+    apply:
+      tags: [metallb]
   tags: metallb
   # Deploy MetalLB unless explicitly disabled, kube-vip owns the load balancer
   # IP range, or Cilium BGP is enabled (Cilium then provides its own load
