@@ -54,10 +54,10 @@ kube_vip_bgp_peeras: "64512"  # Defines the AS for the BGP peer
 # apiserver_endpoint is virtual ip-address which will be configured on each master
 apiserver_endpoint: 10.10.10.99
 
-# k3s_token is required  masters can talk together securely
+# k3s_token is required so masters can talk together securely
 # this token should be alpha numeric only
-#k3s_token: "{{ vault_k3s_token }}"
-k3s_token: "9W8d0KjtCl5PAHvgQghBzk"
+# stored encrypted in all.sops.yaml (SOPS + age)
+k3s_token: "{{ vault_k3s_token }}"
 
 # The IP on which the node is reachable in the cluster.
 # Here, a sensible default is provided, you can still override
