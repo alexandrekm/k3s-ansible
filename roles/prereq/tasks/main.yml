@@ -118,3 +118,31 @@
     path: /etc/sudoers
     validate: visudo -cf %s
   when: ansible_os_family in [ "RedHat", "Suse" ]
+
+# Kubernetes storage client prerequisites (NFS + iSCSI).
+# Prevents node-specific drift (e.g. iscsid disabled on some nodes)
+# after reboot, rebuild, or when adding a node.
+#
+# NOTE: manage_iscsid_daemon defaults to true for fresh builds. Set it to
+# false on hosts where another daemon owns the iscsid IPC socket (e.g. the
+# truenas-csi node DaemonSet binds the host @ISCSIADM_ABSTRACT_NAMESPACE
+# socket, making host iscsid unable to start).
+- name: Install Kubernetes storage client prerequisites
+  ansible.builtin.apt:
+    name:
+      - nfs-common
+      - open-iscsi
+    state: present
+    update_cache: true
+  when: ansible_os_family == "Debian"
+  tags: storage-prereqs
+
+- name: Enable and start the iSCSI initiator daemon
+  ansible.builtin.systemd:
+    name: iscsid
+    enabled: true
+    state: started
+  when:
+    - ansible_os_family == "Debian"
+    - manage_iscsid_daemon | default(true) | bool
+  tags: storage-prereqs
