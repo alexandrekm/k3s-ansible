@@ -5,3 +5,4 @@
 kubeconfig
 .vault_pass
 zIgnore/
+.venv/
