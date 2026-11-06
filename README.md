@@ -197,6 +197,8 @@ See the commands [here](https://technotim.com/posts/k3s-etcd-ansible/#testing-yo
 | `download` | `k3s_version` | string | ❌ | Required | K3s binaries version |
 | `k3s_agent`, `k3s_server`, `k3s_server_post` | `apiserver_endpoint` | string | ❌ | Required | Virtual ip-address configured on each master |
 | `k3s_agent` | `extra_agent_args` | string | `null` | Not required | Extra arguments for agents nodes |
+| `kubelet_safeguards` | `kubelet_node_safeguards` | dict | `{}` | Not required | Kubelet memory/inode eviction thresholds plus `kubeReserved`/`systemReserved`, written to a kubelet drop-in on every cluster node. Empty (the default) leaves the k3s kubelet configuration untouched |
+| `kubelet_safeguards` | `kubelet_safeguards_enforcement_settings` | list | `['pods']` | Not required | `enforceNodeAllocatable` for the safeguards drop-in. Keep `pods`; see the role defaults for why the reserved cgroups are not enforced |
 | `k3s_agent`, `k3s_server` | `group_name_master` | string | `null` | Not required | Name of the master group |
 | `k3s_agent` | `k3s_token` | string | `null` | Not required | Token used to communicate between masters |
 | `k3s_agent`, `k3s_server` | `proxy_env` | dict | `null` | Not required | Internet proxy configurations |

@@ -1,0 +1,47 @@
+---
+# Kubelet node safeguards. k3s writes its own kubelet configuration drop-in
+# (00-k3s-defaults.conf) holding only a two-entry evictionHard map, so a node
+# reports no memory or inode eviction threshold and no reserved resources:
+# reported allocatable equals reported capacity.
+#
+# Set kubelet_node_safeguards to have this role write
+# 90-kubelet-node-safeguards.conf next to it. kubelet merges the drop-in
+# directory in lexical order with a JSON merge patch, so the 90- file wins and
+# must be complete: map fields such as evictionHard are replaced wholesale,
+# never merged key by key. That is also why these values cannot go through
+# extra_agent_args: --eviction-hard is parsed the same way and would silently
+# drop the two thresholds k3s already sets.
+#
+# Example (see the homelab deployment runbook for measured values):
+#
+#   kubelet_node_safeguards:
+#     reservations:
+#       memory: 1Gi
+#       cpu: 250m
+#     eviction_hard:
+#       memory.available: 512Mi
+#       nodefs.available: 10%
+#       nodefs.inodesFree: 5%
+#       imagefs.available: 10%
+#       imagefs.inodesFree: 5%
+#
+# An empty mapping writes nothing, so the kubelet configuration stays exactly
+# what k3s produces.
+kubelet_node_safeguards: {}
+
+# kubelet subtracts kubeReserved and systemReserved from the node's allocatable
+# resources regardless of enforcement. Enforcement is separate: with "pods"
+# kubelet caps the pod cgroup at that reduced allocatable, which is what stops
+# workloads from consuming the reserve. Do not drop "pods"; without it a
+# reservation only shrinks reported capacity. The reserved cgroups are
+# deliberately not enforced, because kubelet only enforces cgroups that already
+# exist and would otherwise put a memory ceiling around the k3s process itself.
+kubelet_safeguards_enforcement_settings:
+  - pods
+
+# k3s data directory, where k3s keeps its kubelet drop-in directory.
+kubelet_safeguards_data_dir: /var/lib/rancher/k3s
+
+# Service whose kubelet must restart to pick up the drop-in. site.yml sets this
+# to k3s on control-plane nodes and to k3s-node on agent nodes.
+kubelet_safeguards_service: k3s-node

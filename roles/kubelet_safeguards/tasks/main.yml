@@ -1,0 +1,41 @@
+---
+# k3s creates this directory itself when it starts, but creating it here keeps
+# the drop-in path independent of whether k3s has run on the host yet.
+- name: Create the kubelet configuration drop-in directory
+  ansible.builtin.file:
+    path: "{{ kubelet_safeguards_data_dir }}/agent/etc/kubelet.conf.d"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+  when: kubelet_node_safeguards | length > 0
+
+- name: Add the kubelet node safeguards drop-in
+  ansible.builtin.template:
+    src: kubelet-node-safeguards.conf.j2
+    dest: >-
+      {{ kubelet_safeguards_data_dir }}/agent/etc/kubelet.conf.d/90-kubelet-node-safeguards.conf
+    owner: root
+    group: root
+    mode: "0600"
+  register: kubelet_safeguards_dropin
+  when: kubelet_node_safeguards | length > 0
+
+# Removing the mapping has to delete the file: k3s only reads the drop-in
+# directory when it starts the kubelet, so a leftover file would keep applying
+# thresholds that are no longer in the inventory.
+- name: Remove the kubelet node safeguards drop-in
+  ansible.builtin.file:
+    path: >-
+      {{ kubelet_safeguards_data_dir }}/agent/etc/kubelet.conf.d/90-kubelet-node-safeguards.conf
+    state: absent
+  register: kubelet_safeguards_dropin_removed
+  when: kubelet_node_safeguards | length == 0
+
+- name: Restart kubelet through {{ kubelet_safeguards_service }}
+  ansible.builtin.systemd:
+    name: "{{ kubelet_safeguards_service }}"
+    state: restarted
+  when: >-
+    kubelet_safeguards_dropin is changed
+    or kubelet_safeguards_dropin_removed is changed

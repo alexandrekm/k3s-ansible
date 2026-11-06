@@ -92,6 +92,30 @@ extra_server_args: >-
 extra_agent_args: >-
   {{ extra_args }}
 
+# Kubelet node safeguards (k8s-homelab-apps epic #1087, item 2). k3s sets
+# only imagefs.available/nodefs.available at 5%, so before this a node had no
+# memory or inode eviction threshold and reported its full capacity as
+# allocatable. Measured on 2026-11-06 over 30 days: k3s host processes peak
+# at 1.86 GiB (worker) / 2.65 GiB (master), and system.slice minus
+# k3s-node.service stays under 0.1 GiB, so 1Gi reserved is the measured
+# floor rather than a guess. Reservations lower allocatable, which is why
+# item 1 raised the workers to 24 GiB first.
+#
+# evictionHard has to repeat the two k3s thresholds: kubelet replaces the
+# map wholesale, and losing imagefs.available/nodefs.available would remove
+# both disk thresholds. memory.available=512Mi keeps the node from reaching
+# 0 MiB available (worker-1 hit 0.64 GiB on this baseline).
+kubelet_node_safeguards:
+  reservations:
+    memory: 1Gi
+    cpu: 250m
+  eviction_hard:
+    memory.available: 512Mi
+    nodefs.available: 10%
+    nodefs.inodesFree: 5%
+    imagefs.available: 10%
+    imagefs.inodesFree: 5%
+
 # image tag for kube-vip
 kube_vip_tag_version: v1.2.3
 
