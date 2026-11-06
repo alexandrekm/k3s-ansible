@@ -1,0 +1,32 @@
+{% set safeguards = kubelet_node_safeguards %}
+{#-
+  Rendered as 90-kubelet-node-safeguards.conf in k3s's kubelet drop-in
+  directory. kubelet merges drop-ins in lexical order with a JSON merge patch,
+  so every map set here replaces k3s's map entirely and must be complete.
+-#}
+apiVersion: kubelet.config.k8s.io/v1beta1
+kind: KubeletConfiguration
+{% if safeguards.reservations is defined %}
+# Reserved for the operating system and for k3s/kubelet on top of it. Both
+# reduce the node's reported allocatable resources.
+kubeReserved:
+{% for resource, quantity in safeguards.reservations | dictsort %}
+  {{ resource }}: "{{ quantity }}"
+{% endfor %}
+systemReserved:
+{% for resource, quantity in safeguards.reservations | dictsort %}
+  {{ resource }}: "{{ quantity }}"
+{% endfor %}
+{% endif %}
+{% if safeguards.eviction_hard is defined %}
+# Complete map: kubelet replaces evictionHard wholesale, so the thresholds k3s
+# sets have to be listed again here, or they silently become zero.
+evictionHard:
+{% for signal, threshold in safeguards.eviction_hard | dictsort %}
+  {{ signal }}: "{{ threshold }}"
+{% endfor %}
+{% endif %}
+enforceNodeAllocatable:
+{% for setting in kubelet_safeguards_enforcement_settings %}
+  - {{ setting }}
+{% endfor %}

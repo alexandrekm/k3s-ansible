@@ -101,6 +101,24 @@ extra_server_args: >-
 extra_agent_args: >-
   {{ extra_args }}
 
+# Kubelet node safeguards for every cluster node. k3s configures kubelet
+# with only imagefs.available and nodefs.available at 5%, which leaves no
+# memory or inode eviction threshold and no reserved resources, so a node
+# reports all of its capacity as schedulable. Uncomment to add thresholds
+# and reservations. kubelet replaces map fields wholesale, so eviction_hard
+# must list every threshold, including the two k3s already sets.
+#
+# kubelet_node_safeguards:
+#   reservations:
+#     memory: 1Gi
+#     cpu: 250m
+#   eviction_hard:
+#     memory.available: 512Mi
+#     nodefs.available: 10%
+#     nodefs.inodesFree: 5%
+#     imagefs.available: 10%
+#     imagefs.inodesFree: 5%
+
 # image tag for kube-vip
 kube_vip_tag_version: v1.2.3
 

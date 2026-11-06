@@ -67,6 +67,22 @@
     - role: k3s_agent
       become: true
 
+# Kubelet only reads its configuration drop-in directory at start, and the k3s
+# agent or server service owns that start, so this runs after the service
+# exists. serial: 1 keeps the restart one node at a time: restarting all
+# masters together would take etcd down with them, and restarting every
+# worker together would take the workloads down with them.
+- name: Apply kubelet node safeguards
+  hosts: k3s_cluster
+  serial: 1
+  environment: "{{ proxy_env | default({}) }}"
+  roles:
+    - role: kubelet_safeguards
+      become: true
+      vars:
+        kubelet_safeguards_service: >-
+          {{ 'k3s' if inventory_hostname in groups[group_name_master | default('master')] else 'k3s-node' }}
+
 - name: Configure k3s cluster
   hosts: master
   environment: "{{ proxy_env | default({}) }}"
