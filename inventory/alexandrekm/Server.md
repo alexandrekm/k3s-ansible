@@ -14,30 +14,30 @@ This document covers the setup of the k3s Kubernetes cluster using Ansible playb
 **Server Hardware Specifications:**
 
 - **CPU:** AMD EPYC (24 Cores, 48 Threads)
-    
+
 - **RAM:** 256 GB
-    
+
 - **GPU:** NVIDIA RTX 3060 (Available for GPU Passthrough to VMs)
-    
+
 - **Motherboard:** ASRock ROMED8-2T
-    
+
 - **Management:** IPMI available at `192.168.99.3`
-    
+
 - **Primary Network:** 2 x 10-Gigabit Ethernet (Intel X550-AT2)
-    
+
 
 **ZFS Storage Pool Overview:**
 
 - **`rpool`:** 128GB SSD (Boot drive for Proxmox OS).
-    
+
 - **`vm-storage-mirrored`:** 2 x 1TB SSDs in a mirror (RAID-1). Intended for critical, redundant VMs like the k3s control plane.
-    
+
 - **`vm-storage-large`:** 1 x 4TB NVMe as a single drive. Intended for high-performance, non-redundant VMs like k3s workers, which will provide storage for Longhorn.
-    
+
 - **`bulk-storage`:** Mirrored 14TB HDDs. Intended for large data storage and as the target for VM backups.
-    
+
 - **`archive-storage`:** 2 x 8TB HDDs in a mirror (RAID-1). Intended for infrequently accessed data.
-    
+
 
 ### 1. Unified Infrastructure as Code (IaC) Strategy
 
@@ -46,13 +46,13 @@ This plan centralizes all infrastructure tasks into a single private Git reposit
 **1.1. Core Principles**
 
 - **Single Source of Truth:** Your private `k3s-home-lab` repository contains all configuration.
-    
+
 - **Role-Based Architecture:** Ansible roles manage each component independently with a unified playbook structure.
-    
+
 - **GitOps Integration:** Argo CD manages applications deployed _on_ the cluster.
-    
+
 - **No Manual `kubectl`:** All changes are managed through Git and Ansible.
-    
+
 
 **1.2. Repository Structure**
 
@@ -86,7 +86,7 @@ The repository uses a unified playbook structure with role-based execution:
     - [`playbooks/install-nvidia-drivers.yaml`](https://github.com/alexandrekm/k3s-home-lab/blob/main/playbooks/install-nvidia-drivers.yaml): Installs NVIDIA drivers on GPU workers
     - [`playbooks/configure-hostnames.yaml`](https://github.com/alexandrekm/k3s-home-lab/blob/main/playbooks/configure-hostnames.yaml): Sets proper hostnames for k3s VMs
     - [`playbooks/cluster-config.yaml`](https://github.com/alexandrekm/k3s-home-lab/blob/main/playbooks/cluster-config.yaml): Additional cluster configuration
-    
+
 
 **1.4. Initial Setup**
 
@@ -112,25 +112,25 @@ ansible-galaxy collection install -r collections/requirements.yaml
 Create a dedicated user and API token on Proxmox for Ansible to use.
 
 1. **Create the Ansible User**
-    
+
     - In the Proxmox UI, go to **Datacenter -> Permissions -> Users** and click **Add**.
-        
+
     - User name: `ansible-user`, Realm: `Proxmox VE authentication server`. Add a strong password.
-        
+
 2. **Grant Permissions**
-    
+
     - Go to **Datacenter -> Permissions** and click **Add -> User Permission**.
-        
+
     - Path: `/`, User: `ansible-user@pve`, Role: `Administrator`.
-        
+
 3. **Create the API Token**
-    
+
     - Go to **Datacenter -> Permissions -> API Tokens** and click **Add**.
-        
+
     - User: `ansible-user@pve`, Token ID: `ansible-automation`.
-        
+
     - **Important:** Uncheck the _Privilege Separation_ box.
-        
+
     - Securely store the generated **Secret**.
 
 
@@ -487,7 +487,7 @@ ansible-playbook provisioning.yaml --tags cluster --vault-password-file ./.vault
   "cluster_vars": {
     "device": {
       "enabled": false,
-      "id": "2:2", 
+      "id": "2:2",
       "name": "ASMedia Technology"
     },
     "hardware": {
@@ -541,7 +541,7 @@ Use `--extra-vars` for:
 4. **Version control**: Consider creating override files for reusable configurations
 5. **Minimal overrides**: Only override necessary values, inherit defaults where possible
 
-    
+
 
 ### 3. Cluster Foundation Architecture
 
@@ -566,47 +566,47 @@ The Axivo k3s-cluster includes these components:
 - **Ingress:** Cilium Gateway API (not traditional Ingress controllers)
 - **Load Balancer:** Cilium L2 announcements with configurable IP pool
 - **DNS:** External DNS with Cloudflare integration for automatic subdomain management
-    
+
 
 **3.3. Longhorn Storage**
 
 - **Installation:** Deployed via the longhorn role in the charts phase
 - **How it Works:** Longhorn pools local storage from worker VMs to create a distributed block storage layer, providing replicated, persistent volumes for stateful applications
 - **Features:** Volume replication, backup/restore, disaster recovery with web UI
-    
+
 
 **3.4. Accessing Bulk Storage with Bind Mounts**
 
 To make ZFS pools available inside Kubernetes, we pass them from the Proxmox host into all worker VMs. Pods scheduled on these workers can then access the storage using a `hostPath` volume.
 
 1. **Proxmox Host: Verify ZFS Permissions (Manual Check)** This is a one-time manual check to ensure containers can write to the storage.
-    
+
     ```
     # Assign ownership to nobody:nogroup (UID/GID 65534)
     chown -R nobody:nogroup /bulk-storage /archive-storage
     chmod -R 777 /bulk-storage /archive-storage
     ```
-    
+
 2. **Proxmox Host: Configure Bind Mounts (Automated)** The `configure-bind-mounts.yaml` playbook safely stops all worker VMs, adds the mount points to their configs, and restarts them.
-    
+
 
 **3.5. Backup and Recovery Strategy**
 
 - **VM Backups:** A daily Proxmox `vzdump` job backs up all VM disks to the `bulk-storage` ZFS pool for disaster recovery.
-    
+
 - **Configuration Backup:** The `k3s-home-lab` Git repository is a complete, version-controlled backup of all cluster and application configurations.
-    
+
 
 ### 4. GitOps and CI/CD Strategy
 
 **4.1. The GitOps Workflow**
 
 1. **Infrastructure Change:** A change to an Ansible playbook triggers the GitHub Actions workflow to update the cluster.
-    
+
 2. **Application Change:** A change to a manifest in the `apps/` directory is pushed to Git.
-    
+
 3. **Automatic Sync:** Argo CD detects the change and automatically syncs the application in the cluster to match the new state in Git.
-    
+
 
 **4.2. GitHub Actions Workflow**
 
@@ -640,7 +640,7 @@ With Cilium Gateway API and Cert-Manager, you can securely expose applications w
 - **How it Works:** You point a DNS record to the Cilium load balancer IP. A Kubernetes `HTTPRoute` manifest tells Cilium how to route traffic for that domain. Cert-Manager automatically obtains TLS certificates from Let's Encrypt and integrates with External DNS for DNS-01 challenges.
 
 - **Architecture Difference:** Uses Gateway API (successor to Ingress) with Cilium's eBPF-based load balancing instead of traditional ingress controllers.
-    
+
 
 ### 6. Application Structure
 
