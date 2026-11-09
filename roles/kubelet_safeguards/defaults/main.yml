@@ -24,6 +24,11 @@
 #       nodefs.inodesFree: 5%
 #       imagefs.available: 10%
 #       imagefs.inodesFree: 5%
+#     # Optional. Omit to keep k3s's own 85/80 defaults.
+#     image_gc:
+#       high: 85
+#       low: 80
+#       minimum_age: 2m
 #
 # An empty mapping writes nothing, so the kubelet configuration stays exactly
 # what k3s produces.
@@ -37,6 +42,27 @@ kubelet_node_safeguards: {}
 # deliberately not enforced, because kubelet only enforces cgroups that already
 # exist and would otherwise put a memory ceiling around the k3s process itself.
 kubelet_safeguards_enforcement_settings:
+
+# Image GC thresholds are percentage-based, which means the absolute size of
+# the GC band scales with the root disk. Measured 2026-11-09 on 80G worker
+# roots (76.4G usable) at the k3s defaults of 85/80:
+#
+#   GC high (85%)  64.9G used   11.5G free   <- GC starts here
+#   GC low  (80%)  61.1G used   15.3G free   <- GC stops here
+#   eviction (10%) 68.8G used    7.6G free
+#
+# The band is only ~4G wide and sits ~4G above the eviction line, so a burst
+# between GC cycles can cross into eviction before GC runs at all. worker-2
+# did exactly that on 2026-11-06, reaching 9.2% free.
+#
+# Lowering the thresholds is NOT a free fix: GC high has to stay above the
+# node's normal working set or GC runs continuously and re-pulls images. On
+# these nodes the ordinary working set is 53-63G (69-82% of 76.4G), so 80/70
+# would put worker-1 (82.3%) permanently above the high threshold. That is
+# why the homelab keeps 85/80 and instead grew the free space: pruning unused
+# images took worker-1 from 14G to 23G free and worker-2 from 23G to 42G.
+#
+# Prefer raising capacity or pruning images over moving these thresholds.
   - pods
 
 # k3s data directory, where k3s keeps its kubelet drop-in directory.
