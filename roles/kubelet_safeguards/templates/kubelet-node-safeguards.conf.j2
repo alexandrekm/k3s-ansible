@@ -26,6 +26,16 @@ evictionHard:
   {{ signal }}: "{{ threshold }}"
 {% endfor %}
 {% endif %}
+{% if safeguards.image_gc is defined %}
+# Image GC is percentage-based, so on a small root disk the GC band can sit
+# close to the evictionHard line and a burst between GC cycles can cross it.
+# Keep these above the eviction thresholds: GC must reclaim before eviction.
+imageGCHighThresholdPercent: {{ safeguards.image_gc.high }}
+imageGCLowThresholdPercent: {{ safeguards.image_gc.low }}
+{% if safeguards.image_gc.minimum_age is defined %}
+imageMinimumGCAge: {{ safeguards.image_gc.minimum_age }}
+{% endif %}
+{% endif %}
 enforceNodeAllocatable:
 {% for setting in kubelet_safeguards_enforcement_settings %}
   - {{ setting }}
